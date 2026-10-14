@@ -1,0 +1,4 @@
+vtk>=9.7
+openpyxl>=3.1
+Pillow>=10.0
+numpy>=1.24
