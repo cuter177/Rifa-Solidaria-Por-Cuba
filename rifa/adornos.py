@@ -341,7 +341,8 @@ class Adornos:
         self._colocar(self.bandera, bx, by, bw, bh)
 
         # Logos de las organizaciones, justo debajo de la bandera.
-        tam = min(126.0, max(64.0, min(alto * 0.15, bw * 0.52)))
+        tam = min(float(config.LOGO_TAMANO_MAX),
+                  max(64.0, min(alto * config.LOGO_ALTO_REL, bw * 0.56)))
         hueco = max(16.0, tam * 0.16)
         n = len(self.logos)
         total = n * tam + max(0, n - 1) * hueco

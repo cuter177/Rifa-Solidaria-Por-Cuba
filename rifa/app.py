@@ -50,6 +50,13 @@ class RifaApp:
         self.participantes: list[datos.Participante] = []
         self.restantes: list[datos.Participante] = []
         self.ganadores: list[datos.Participante] = []
+        self.eliminados: list[datos.Participante] = []
+        self.ultimo: datos.Participante | None = None
+        self.ultimo_fue_ganador = True
+        self.cada_cuantos_gana = 1
+        self.giros = 0
+        self.contador_modo = 0
+        self._giro_es_ganador = True
 
         self.theta = 0.0
         self.indice_ganador: int | None = None
@@ -76,6 +83,7 @@ class RifaApp:
             self.cargar(ruta_inicial)
         else:
             self._actualizar_hud()
+            self._repartir()
 
     # ==================================================================
     # Construccion
@@ -122,20 +130,28 @@ class RifaApp:
             radio=18, altura=config.ALTO_BOTON_BASE,
         )
         self.btn_cargar = Boton(
-            self.renderer, "CARGAR ARCHIVO", config.FUENTE_BOTON_SEC,
+            self.renderer, "CARGAR LISTA", config.FUENTE_BOTON_SEC,
             config.AZUL_BOTON, config.AZUL_BOTON_HOVER,
             config.AZUL_BOTON_OFF, config.COLOR_TEXTO_BOTON,
             config.COLOR_TEXTO_BOTON_OFF, config.AZUL_BOTON_BORDE,
             radio=16, altura=config.ALTO_BOTON_SEC,
         )
         self.btn_resultados = Boton(
-            self.renderer, "CARGAR RESULTADOS", config.FUENTE_BOTON_SEC,
+            self.renderer, "RESULTADOS", config.FUENTE_BOTON_SEC,
             config.AZUL_BOTON, config.AZUL_BOTON_HOVER,
             config.AZUL_BOTON_OFF, config.COLOR_TEXTO_BOTON,
             config.COLOR_TEXTO_BOTON_OFF, config.AZUL_BOTON_BORDE,
             radio=16, altura=config.ALTO_BOTON_SEC,
         )
-        self.botones = (self.btn_girar, self.btn_cargar, self.btn_resultados)
+        self.btn_modo = Boton(
+            self.renderer, "MODO: CADA GIRO", config.FUENTE_BOTON_SEC,
+            config.AZUL_BOTON, config.AZUL_BOTON_HOVER,
+            config.AZUL_BOTON_OFF, config.COLOR_TEXTO_BOTON,
+            config.COLOR_TEXTO_BOTON_OFF, config.AZUL_BOTON_BORDE,
+            radio=16, altura=config.ALTO_BOTON_SEC,
+        )
+        self.botones = (self.btn_girar, self.btn_cargar, self.btn_resultados,
+                        self.btn_modo)
 
         self.titulo = Texto(self.renderer, "RIFA SOLIDARIA", config.FUENTE_TITULO,
                             config.DORADO, negrita=True, justificar="izquierda")
@@ -147,7 +163,7 @@ class RifaApp:
                                negrita=False, justificar="izquierda")
         self.ayuda_txt = Texto(
             self.renderer,
-            "ESPACIO gira · C carga archivo · R resultados · ESC sale",
+            "ESPACIO gira · C carga · R resultados · M modo · ESC sale",
             config.FUENTE_AYUDA, (0.52, 0.58, 0.66), negrita=False,
             justificar="izquierda",
         )
@@ -189,7 +205,7 @@ class RifaApp:
         alto_g = int(config.ALTO_BOTON_BASE * escala)
         alto_c = int(config.ALTO_BOTON_SEC * escala)
         hueco = int(max(16.0, alto * 0.026))
-        total = alto_g + 2 * alto_c + 2 * hueco
+        total = alto_g + alto_c + 2 * hueco
 
         tope = int(alto * 0.56)
         if techo is not None:
@@ -197,15 +213,26 @@ class RifaApp:
         tope = max(tope, 96 + total)
 
         y_girar = tope - alto_g
-        y_cargar = y_girar - hueco - alto_c
-        y_result = y_cargar - hueco - alto_c
+        y_sec = y_girar - hueco - alto_c
+        ancho_sec = (ancho_b - hueco) // 2
         self.btn_girar.colocar(x_b, y_girar, ancho_b, alto_g)
-        self.btn_cargar.colocar(x_b, y_cargar, ancho_b, alto_c)
-        self.btn_resultados.colocar(x_b, y_result, ancho_b, alto_c)
+        self.btn_cargar.colocar(x_b, y_sec, ancho_sec, alto_c)
+        self.btn_resultados.colocar(
+            x_b + ancho_sec + hueco, y_sec, ancho_b - ancho_sec - hueco, alto_c,
+        )
 
+        ancho_hud = max(360.0, min(ancho * 0.42, 600.0))
+        self.estado_txt.fijar(px=config.FUENTE_HUD)
+        self.estado_txt.envolver_a(ancho_hud)
+        _, alto_hud = self.estado_txt.medir()
+        espacio_hud = max(80.0, y_sec - config.HUD_HUECO - 24.0)
+        if alto_hud > espacio_hud:
+            px_hud = max(24, int(self.estado_txt.px * espacio_hud / alto_hud * 0.96))
+            self.estado_txt.fijar(px=px_hud)
+            self.estado_txt.envolver_a(ancho_hud)
+            _, alto_hud = self.estado_txt.medir()
         self.estado_txt.fijar(pos=(x_b + ancho_b / 2.0,
-                                   y_result - int(max(38.0, alto * 0.075))))
-        self.estado_txt.envolver_a(ancho_b + 80)
+                                   y_sec - config.HUD_HUECO - alto_hud / 2.0))
 
         # Titulos arriba a la izquierda (crecen con la ventana).
         px_titulo = int(max(30, min(config.FUENTE_TITULO, ancho * 0.05)))
@@ -215,6 +242,12 @@ class RifaApp:
             px=px_sub,
             pos=(34, alto - int(px_titulo * 1.05) - int(px_sub * 1.5)),
         )
+        self._actualizar_modo_boton()
+        y_sub = alto - int(px_titulo * 1.05) - int(px_sub * 1.5)
+        alto_modo = int(config.ALTO_BOTON_SEC * max(0.72, min(1.0, alto / 900.0)))
+        ancho_modo = int(max(250.0, min(ancho * 0.30, 390.0)))
+        y_modo = int(max(90.0, y_sub - px_sub / 2.0 - 18.0 - alto_modo))
+        self.btn_modo.colocar(34, y_modo, ancho_modo, alto_modo)
         self.aviso_txt.fijar(pos=(34, int(max(70.0, alto * 0.10))))
         self.aviso_txt.envolver_a(max(200.0, ancho * 0.6))
         self.ayuda_txt.fijar(pos=(34, 22))
@@ -224,6 +257,13 @@ class RifaApp:
         elif self.estado == Estado.HISTORIAL:
             self.historial.repartir(ancho, alto)
             self._pintar_historial()
+
+    def _actualizar_modo_boton(self):
+        if self.cada_cuantos_gana == 1:
+            etiqueta = "MODO: CADA GIRO"
+        else:
+            etiqueta = f"MODO: CADA {self.cada_cuantos_gana} GIROS"
+        self.btn_modo.etiqueta(etiqueta)
 
     def _ancho_mundo(self) -> float:
         ancho, alto = self.render_window.GetSize()
@@ -286,6 +326,8 @@ class RifaApp:
             self._elegir_archivo()
         elif self.btn_resultados.habilitado and self.btn_resultados.contiene(x, y):
             self._elegir_resultados()
+        elif self.btn_modo.habilitado and self.btn_modo.contiene(x, y):
+            self._elegir_modo()
         elif self.btn_girar.habilitado and self.btn_girar.contiene(x, y):
             self.girar()
 
@@ -315,6 +357,9 @@ class RifaApp:
         elif tecla in ("c", "C"):
             if self.estado in (Estado.LISTO, Estado.SIN_DATOS, Estado.FIN):
                 self._elegir_archivo()
+        elif tecla in ("m", "M"):
+            if self.estado in (Estado.LISTO, Estado.SIN_DATOS, Estado.FIN):
+                self._elegir_modo()
 
     # ==================================================================
     # Timers
@@ -335,6 +380,9 @@ class RifaApp:
         indice = self.rng.randrange(n)
         vueltas = self.rng.randint(config.VUELTAS_MIN, config.VUELTAS_MAX)
         destino = g.theta_para_ganador(indice, n, self.theta, vueltas, self.rng)
+        self._giro_es_ganador = (
+            (self.contador_modo + 1) % self.cada_cuantos_gana == 0
+        )
 
         self.indice_ganador = indice
         self.anim = {
@@ -347,6 +395,7 @@ class RifaApp:
         self.btn_girar.habilitar(False)
         self.btn_cargar.habilitar(False)
         self.btn_resultados.habilitar(False)
+        self.btn_modo.habilitar(False)
         self._avisar(None)
         self._asegurar_timer()
 
@@ -368,7 +417,7 @@ class RifaApp:
         ganador = self.restantes[self.indice_ganador]
         ancho, alto = self.render_window.GetSize()
         self.tarjeta.repartir(ancho, alto)
-        self.tarjeta.preparar(ganador.numero, ganador.nombre)
+        self.tarjeta.preparar(ganador.numero, ganador.nombre, self._giro_es_ganador)
         self.tarjeta.visible(True)
         self.tarjeta.colocar(0.10)
         self.tarjeta.opacidad(0.0)
@@ -376,7 +425,7 @@ class RifaApp:
         # Los numeros y los botones se ocultan un poco despues, cuando empieza
         # a entrar la tarjeta: asi la aguja se ve sobre el numero ganador.
         self.sombra.fijar(0.0)
-        if config.CONFETI:
+        if config.CONFETI and self._giro_es_ganador:
             self.confeti.lanzar(self._ancho_mundo(), self._alto_mundo())
 
         self.estado = Estado.REVELADO
@@ -400,11 +449,11 @@ class RifaApp:
         self.tarjeta.opacidad(min(1.0, max(0.0, t_tarjeta * 2.2)))
 
         t_confeti = t - config.INICIO_REVEAL
-        if config.CONFETI:
+        if config.CONFETI and self._giro_es_ganador:
             self.confeti.actualizar(max(0.0, t_confeti))
 
         sigue_animando = t_tarjeta < 1.0
-        if config.CONFETI:
+        if config.CONFETI and self._giro_es_ganador:
             sigue_animando = sigue_animando or t_confeti < config.CONFETI_DURACION
         return sigue_animando
 
@@ -414,6 +463,7 @@ class RifaApp:
         self.btn_girar.visibilidad(False)
         self.btn_cargar.visibilidad(False)
         self.btn_resultados.visibilidad(False)
+        self.btn_modo.visibilidad(False)
         self.estado_txt.visibilidad(False)
         self.aviso_txt.visibilidad(False)
         self.ayuda_txt.visibilidad(False)
@@ -423,16 +473,29 @@ class RifaApp:
             self.estado = Estado.LISTO
             return
         ganador = self.restantes.pop(self.indice_ganador)
-        self.ganadores.append(ganador)
+        es_ganador = self._giro_es_ganador
+        self.ultimo = ganador
+        self.ultimo_fue_ganador = es_ganador
+        if es_ganador:
+            self.ganadores.append(ganador)
+        else:
+            self.eliminados.append(ganador)
+        self.giros += 1
+        self.contador_modo += 1
         self.indice_ganador = None
 
         if self.ruta:
             try:
-                destino = datos.registrar_ganador(
-                    self.ruta, self.sesion, len(self.ganadores), ganador
+                orden = self.giros
+                destino = datos.registrar_resultado(
+                    self.ruta, self.sesion, orden, ganador,
+                    "gana" if es_ganador else "no_gana",
                 )
-                print(f"Ganador {len(self.ganadores):>2}: Nº {ganador.numero} "
-                      f"{ganador.nombre}  ->  {destino}", flush=True)
+                if es_ganador:
+                    datos.guardar_ganadores(self.ruta, self.ganadores)
+                etiqueta = "Ganador" if es_ganador else "No gana"
+                print(f"{etiqueta} {ganador.numero:>3}: {ganador.nombre}  ->  {destino}",
+                      flush=True)
             except OSError as exc:
                 self._avisar(f"No se pudo guardar el registro de ganadores:\n{exc}")
 
@@ -442,6 +505,7 @@ class RifaApp:
         self.btn_girar.visibilidad(True)
         self.btn_cargar.visibilidad(True)
         self.btn_resultados.visibilidad(True)
+        self.btn_modo.visibilidad(True)
         self.estado_txt.visibilidad(True)
         self.ayuda_txt.visibilidad(True)
         self.aviso_txt.visibilidad(self.aviso_activo)
@@ -483,6 +547,12 @@ class RifaApp:
         self.participantes = lista
         self.restantes = list(lista)
         self.ganadores = []
+        self.eliminados = []
+        self.ultimo = None
+        self.ultimo_fue_ganador = True
+        self.giros = 0
+        self.contador_modo = 0
+        self._giro_es_ganador = True
         self.theta = 0.0
         self.indice_ganador = None
         self.estado = Estado.LISTO
@@ -497,10 +567,41 @@ class RifaApp:
         self.rueda.fijar_angulo(0.0)
 
         self._avisar(None)
+        try:
+            datos.guardar_ganadores(self.ruta, self.ganadores)
+        except OSError as exc:
+            self._avisar(f"No se pudo preparar el archivo de ganadores:\n{exc}")
+
         self._actualizar_hud()
         self._repartir()
         self.render_window.Render()
         return True
+
+    # ==================================================================
+    # Modo del sorteo
+    # ==================================================================
+    def _elegir_modo(self):
+        respuesta = archivos.pedir_texto(
+            "Modo del sorteo",
+            "Cada cuantos giros gana uno? (1 = gana el que sale)",
+            str(self.cada_cuantos_gana),
+        )
+        if not respuesta:
+            return
+        try:
+            frecuencia = int(respuesta)
+        except ValueError:
+            self._avisar("Escribe un numero entero entre 1 y 99.")
+            return
+        if not 1 <= frecuencia <= 99:
+            self._avisar("La frecuencia debe estar entre 1 y 99.")
+            return
+        self.cada_cuantos_gana = frecuencia
+        self.contador_modo = 0
+        self._avisar(None)
+        self._actualizar_hud()
+        self._repartir()
+        self.render_window.Render()
 
     # ==================================================================
     # Resultados (lista de ganadores)
@@ -617,24 +718,45 @@ class RifaApp:
         total = len(self.participantes)
         restantes = len(self.restantes)
         ganados = len(self.ganadores)
+        eliminados = len(self.eliminados)
 
         if total == 0:
-            texto = "Sin participantes\n\nPulsa CARGAR ARCHIVO"
+            texto = "Sin participantes\n\nPulsa CARGAR LISTA"
         elif restantes == 0:
-            texto = f"{total} participantes\nGanados: {ganados}\n\nSorteo finalizado"
+            texto = (
+                f"{total} participantes\n"
+                f"Ganados: {ganados} · No ganan: {eliminados}\n\n"
+                "Sorteo finalizado"
+            )
         else:
-            ultimo = self.ganadores[-1].nombre if self.ganadores else "—"
+            proximo = "GANA" if (
+                (self.contador_modo + 1) % self.cada_cuantos_gana == 0
+            ) else "NO GANA"
+            ultimo = "—"
+            if self.ultimo is not None:
+                estado_ultimo = "gana" if self.ultimo_fue_ganador else "no gana"
+                ultimo = f"Nº {self.ultimo.numero} · {estado_ultimo}"
             texto = (
                 f"Participantes: {total}\n"
                 f"Restantes: {restantes}\n"
-                f"Ganados: {ganados}\n"
-                f"Ultimo: {ultimo}"
+                f"Ganados: {ganados} · Eliminados: {eliminados}\n"
+                f"Proximo: {proximo} · Ultimo: {ultimo}"
             )
+            faltan_para_ganar = self.cada_cuantos_gana - (
+                self.contador_modo % self.cada_cuantos_gana
+            )
+            if restantes < faltan_para_ganar:
+                texto += "\nSin suficientes giros para otro ganador"
         self.estado_txt.fijar(texto)
-        self.estado_txt.envolver_a(max(200.0, self.render_window.GetSize()[0] * 0.20))
+        self.estado_txt.envolver_a(max(360.0, min(
+            self.render_window.GetSize()[0] * 0.42, 600.0,
+        )))
+        self._actualizar_modo_boton()
         self.btn_girar.habilitar(restantes > 0 and self.estado == Estado.LISTO)
         self.btn_cargar.habilitar(True)
         self.btn_resultados.habilitar(self.estado != Estado.HISTORIAL)
+        self.btn_modo.habilitar(self.estado not in
+                                (Estado.GIRANDO, Estado.REVELADO, Estado.HISTORIAL))
 
     def _avisar(self, mensaje: str | None):
         if mensaje:

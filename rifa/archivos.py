@@ -162,6 +162,43 @@ def elegir_archivo(titulo: str, filtros=None, carpeta: str | None = None) -> str
     return ""
 
 
+def pedir_texto(titulo: str, mensaje: str, valor_inicial: str = "") -> str:
+    """Pide una linea de texto usando el dialogo nativo disponible."""
+    zenity = shutil.which("zenity")
+    if zenity:
+        try:
+            resultado = subprocess.run(
+                [zenity, "--entry", f"--title={titulo}", f"--text={mensaje}",
+                 f"--entry-text={valor_inicial}"],
+                capture_output=True, text=True,
+            )
+            if resultado.returncode == 0:
+                return resultado.stdout.strip()
+            return ""
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        import tkinter
+        from tkinter import simpledialog
+    except Exception:  # noqa: BLE001
+        return ""
+
+    raiz = tkinter.Tk()
+    raiz.withdraw()
+    try:
+        try:
+            raiz.attributes("-topmost", True)
+        except Exception:  # noqa: BLE001
+            pass
+        respuesta = simpledialog.askstring(
+            titulo, mensaje, initialvalue=valor_inicial, parent=raiz,
+        )
+    finally:
+        raiz.destroy()
+    return (respuesta or "").strip()
+
+
 # ---------------------------------------------------------------------------
 # Gestor de archivos del sistema
 # ---------------------------------------------------------------------------

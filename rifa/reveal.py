@@ -85,12 +85,28 @@ class Tarjeta:
         self.centro = (ancho_pantalla / 2.0, alto_pantalla * 0.5)
         self.colocar(1.0)
 
-    def preparar(self, numero: int, nombre: str):
+    def preparar(self, numero: int, nombre: str, gana: bool = True):
         """Fija el contenido y calcula los tamanos de fuente definitivos."""
         ancho_util = self.ancho * 0.82
-        self._titulo.fijar("¡HA SALIDO EL NÚMERO!")
-        self._numero.fijar(f"Nº {numero}")
+        if gana:
+            color_borde = config.COLOR_TARJETA_BORDE
+            color_fondo = config.COLOR_TARJETA
+            color_numero = config.DORADO
+            titulo = "¡HA SALIDO EL NÚMERO!"
+            pie = "Clic para continuar"
+        else:
+            color_borde = config.COLOR_TARJETA_BORDE_NO_GANA
+            color_fondo = config.COLOR_TARJETA_NO_GANA
+            color_numero = config.COLOR_NO_GANA
+            titulo = "¡NÚMERO NO GANADOR!"
+            pie = "NO GANA · CONTINÚA EL SORTEO"
+        self._borde.color(color_borde)
+        self._fondo.color(color_fondo)
+        self._titulo.fijar(titulo, color=color_numero)
+        self._numero.fijar(f"Nº {numero}", color=color_numero)
+        self._separador.color(color_borde)
         self._nombre.fijar(nombre, px=int(self.alto * 0.132))
+        self._pie.fijar(pie)
         self._nombre.envolver_a(self.ancho * 0.80, lineas_max=2)
 
         self._px_titulo = self._titulo.ajustar_a(ancho_util, int(self.alto * 0.082), px_min=8)

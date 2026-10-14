@@ -27,6 +27,7 @@ CAB_NOMBRE = {
 CAB_RES_SESION = {"sesion", "sesión", "session", "ronda", "sorteo"}
 CAB_RES_ORDEN = {"orden", "order", "puesto", "posicion", "posición", "turno"}
 CAB_RES_FECHA = {"fecha_hora", "fecha", "hora", "date", "timestamp", "cuando", "momento"}
+CAB_RES_RESULTADO = {"resultado", "result", "estado", "status"}
 
 EXTENSIONES_CSV = {".csv", ".txt", ".tsv"}
 EXTENSIONES_EXCEL = {".xlsx", ".xlsm", ".xltx", ".xltm"}
@@ -54,6 +55,7 @@ class Ganador:
     numero: int
     nombre: str
     fecha_hora: str = ""
+    resultado: str = "gana"
 
     def __str__(self) -> str:  # pragma: no cover - solo depuracion
         return f"{self.orden}. Nº {self.numero} {self.nombre}"
@@ -275,9 +277,11 @@ def resumen(participantes: list[Participante]) -> str:
     if not participantes:
         return "Sin participantes cargados"
     numeros = [p.numero for p in participantes]
+    faltantes = set(range(min(numeros), max(numeros) + 1)) - set(numeros)
+    aviso = f" ({len(faltantes)} sin vender)" if faltantes else ""
     return (
         f"{len(participantes)} participantes · "
-        f"numeros {min(numeros)} a {max(numeros)}"
+        f"numeros {min(numeros)} a {max(numeros)}{aviso}"
     )
 
 
@@ -289,20 +293,57 @@ def ruta_registro(ruta_entrada: str) -> str:
     return os.path.join(carpeta, f"{base}_resultados.csv")
 
 
-def registrar_ganador(ruta_entrada: str, sesion: str, orden: int,
-                      participante: Participante) -> str:
-    """Anade una linea al registro de ganadores y devuelve la ruta usada.
+def ruta_ganadores(ruta_entrada: str) -> str:
+    """Archivo de ganadores de la sesion actual, en formato de participantes."""
+    ruta_abs = os.path.abspath(ruta_entrada)
+    carpeta = os.path.dirname(ruta_abs) or os.getcwd()
+    base = os.path.splitext(os.path.basename(ruta_abs))[0] or "rifa"
+    return os.path.join(carpeta, f"{base}_ganadores.csv")
 
-    El registro se acumula entre sesiones (nunca se borra: en una rifa real
-    interesa conservar el historial), por eso cada linea lleva la sesion a la
-    que pertenece.
-    """
+
+def guardar_ganadores(ruta_entrada: str,
+                      ganadores: list[Participante]) -> str:
+    """Reescribe los ganadores actuales como una lista de participantes."""
+    destino = ruta_ganadores(ruta_entrada)
+    with open(destino, "w", newline="", encoding="utf-8") as fh:
+        escritor = csv.writer(fh)
+        escritor.writerow(["Número", "Nombre"])
+        escritor.writerows((p.numero, p.nombre) for p in ganadores)
+    return destino
+
+
+def _migrar_registro_resultados(destino: str):
+    """Completa registros antiguos con la columna ``resultado``."""
+    if not os.path.exists(destino) or os.path.getsize(destino) == 0:
+        return
+    with open(destino, "r", newline="", encoding="utf-8-sig") as fh:
+        filas = list(csv.reader(fh))
+    if not filas:
+        return
+    cabeceras = {_normalizar_cabecera(celda) for celda in filas[0]}
+    if "resultado" in cabeceras or "result" in cabeceras:
+        return
+    filas[0].append("resultado")
+    for fila in filas[1:]:
+        fila.append("gana")
+    with open(destino, "w", newline="", encoding="utf-8") as fh:
+        csv.writer(fh).writerows(filas)
+
+
+def registrar_resultado(ruta_entrada: str, sesion: str, orden: int,
+                        participante: Participante,
+                        resultado: str = "gana") -> str:
+    """Anade un giro al registro acumulado y devuelve la ruta usada."""
+    resultado = "no_gana" if resultado == "no_gana" else "gana"
     destino = ruta_registro(ruta_entrada)
-    nuevo = not os.path.exists(destino)
+    _migrar_registro_resultados(destino)
+    nuevo = not os.path.exists(destino) or os.path.getsize(destino) == 0
     with open(destino, "a", newline="", encoding="utf-8") as fh:
         escritor = csv.writer(fh)
         if nuevo:
-            escritor.writerow(["sesion", "orden", "numero", "nombre", "fecha_hora"])
+            escritor.writerow([
+                "sesion", "orden", "numero", "nombre", "fecha_hora", "resultado",
+            ])
         escritor.writerow(
             [
                 sesion,
@@ -310,9 +351,16 @@ def registrar_ganador(ruta_entrada: str, sesion: str, orden: int,
                 participante.numero,
                 participante.nombre,
                 _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                resultado,
             ]
         )
     return destino
+
+
+def registrar_ganador(ruta_entrada: str, sesion: str, orden: int,
+                      participante: Participante) -> str:
+    """Compatibilidad: registra un ganador con el formato nuevo."""
+    return registrar_resultado(ruta_entrada, sesion, orden, participante, "gana")
 
 
 # ---------------------------------------------------------------------------
@@ -340,8 +388,9 @@ def cargar_resultados(ruta: str) -> list[Ganador]:
     """Lee un archivo de resultados y devuelve sus ganadores en orden.
 
     Acepta el archivo que genera la propia rifa
-    (``sesion,orden,numero,nombre,fecha_hora``) y es flexible con las
-    cabeceras y el orden de las columnas.
+    (``sesion,orden,numero,nombre,fecha_hora,resultado``) y es flexible con
+    las cabeceras y el orden de las columnas. Los giros ``no_gana`` se
+    conservan en el registro, pero no se muestran como ganadores.
     """
     if not os.path.exists(ruta):
         raise ErrorDatos(f"No existe el archivo:\n{ruta}")
@@ -355,7 +404,8 @@ def cargar_resultados(ruta: str) -> list[Ganador]:
         raise ErrorDatos("El archivo de resultados no contiene ninguna linea.")
 
     indices: dict[str, int | None] = {
-        "sesion": None, "orden": None, "numero": None, "nombre": None, "fecha": None,
+        "sesion": None, "orden": None, "numero": None, "nombre": None,
+        "fecha": None, "resultado": None,
     }
     conocidas = 0
     for posicion, celda in enumerate(filas[0]):
@@ -366,6 +416,7 @@ def cargar_resultados(ruta: str) -> list[Ganador]:
             ("numero", CAB_NUMERO),
             ("nombre", CAB_NOMBRE),
             ("fecha", CAB_RES_FECHA),
+            ("resultado", CAB_RES_RESULTADO),
         ):
             if indices[campo] is None and clave in cabeceras:
                 indices[campo] = posicion
@@ -379,10 +430,11 @@ def cargar_resultados(ruta: str) -> list[Ganador]:
         if n_columnas <= 2 and _parece_numerica(filas, 0) >= 0.6:
             # Un simple "numero,nombre" sin cabecera.
             indices = {"sesion": None, "orden": None, "numero": 0,
-                       "nombre": 1, "fecha": None}
+                       "nombre": 1, "fecha": None, "resultado": None}
         else:
             # Se asume el orden que escribe la rifa.
-            indices = {"sesion": 0, "orden": 1, "numero": 2, "nombre": 3, "fecha": 4}
+            indices = {"sesion": 0, "orden": 1, "numero": 2, "nombre": 3,
+                       "fecha": 4, "resultado": 5}
 
     ganadores: list[Ganador] = []
     for fila in (filas[1:] if hay_cabecera else filas):
@@ -391,6 +443,9 @@ def cargar_resultados(ruta: str) -> list[Ganador]:
         if not nombre and numero is None:
             continue
         orden = _a_entero(_celda(fila, indices["orden"]))
+        resultado = _texto(_celda(fila, indices["resultado"])).lower()
+        if resultado in {"no_gana", "no gana", "no-gana", "eliminado"}:
+            continue
         ganadores.append(
             Ganador(
                 sesion=_texto(_celda(fila, indices["sesion"])),
@@ -398,6 +453,7 @@ def cargar_resultados(ruta: str) -> list[Ganador]:
                 numero=numero if numero is not None else 0,
                 nombre=nombre,
                 fecha_hora=_texto(_celda(fila, indices["fecha"])),
+                resultado="gana",
             )
         )
 

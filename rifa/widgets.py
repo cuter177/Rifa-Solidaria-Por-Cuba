@@ -291,6 +291,13 @@ class Boton:
             self.habilitado = valor
             self._refrescar()
 
+    def etiqueta(self, texto):
+        """Cambia la etiqueta conservando el tamano configurado."""
+        self._texto.fijar(texto=str(texto), px=self.fuente_px)
+        if self.rect[2] > 0:
+            self._texto.ajustar_a(max(24.0, self.rect[2] - 26.0),
+                                  self.fuente_px, px_min=11)
+
     def pasar_encima(self, valor):
         if self.hover != valor:
             self.hover = valor

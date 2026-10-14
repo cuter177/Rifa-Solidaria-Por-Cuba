@@ -95,6 +95,9 @@ FUENTE_GANADOR_TITULO = 32
 FUENTE_GANADOR_PIE = 23
 COLOR_TARJETA = (0.016, 0.043, 0.086)
 COLOR_TARJETA_BORDE = (0.945, 0.780, 0.361)
+COLOR_TARJETA_NO_GANA = (0.050, 0.060, 0.080)
+COLOR_TARJETA_BORDE_NO_GANA = (0.600, 0.650, 0.720)
+COLOR_NO_GANA = (0.720, 0.760, 0.830)
 
 # --------------------------------------------------------------------------
 # Confeti (opcional)
@@ -113,7 +116,8 @@ PALETA_CONFETI = [
 # --------------------------------------------------------------------------
 # HUD / textos de pantalla
 # --------------------------------------------------------------------------
-FUENTE_HUD = 21
+FUENTE_HUD = 36
+HUD_HUECO = 30
 FUENTE_AVISO = 19
 FUENTE_AYUDA = 18
 COLOR_HUD = (0.760, 0.815, 0.880)
@@ -146,6 +150,8 @@ LOGOS = [
     ("BREP", os.path.join(_RAIZ, "doc", "breplogo.jpeg")),
     ("FADEP", os.path.join(_RAIZ, "doc", "FadepLOGO.jpg")),
 ]
+LOGO_TAMANO_MAX = 190
+LOGO_ALTO_REL = 0.22
 
 # --------------------------------------------------------------------------
 # Fuentes del sistema (necesarias para acentos y "n con virgulilla")

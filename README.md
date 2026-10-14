@@ -16,13 +16,17 @@ Al detenerse la ruleta, el fondo se oscurece y aparece el nombre del ganador:
 ## Puesta en marcha
 
 ```bash
-./run.sh                                  # abre la ruleta con el ejemplo incluido
+./run.sh                                  # carga la lista privada si existe; si no, el ejemplo
 ./run.sh ruta/a/mi_lista.xlsx             # o carga directamente tu archivo
 ```
 
 `run.sh` crea el entorno virtual `.venv`, instala VTK y `openpyxl` la primera
 vez (la descarga de VTK son unos 200 MB) y arranca la aplicación. A partir de
 ahí, los siguientes arranques son instantáneos.
+
+Sin argumentos se busca automáticamente `rifa-solidaria-por-cuba.csv` en la
+raíz del proyecto y, si no existe, `ejemplos/participantes.csv`. La lista real
+está excluida de git porque contiene datos personales.
 
 También se puede lanzar a mano:
 
@@ -67,15 +71,20 @@ Detalles que se detectan automáticamente:
 * Las filas vacías se ignoran, los números se ordenan de menor a mayor y los
   **duplicados dan un error claro** en pantalla en vez de sortear mal.
 
+Las filas cuyo número no tiene nombre se consideran **boletos no vendidos** y
+se excluyen de la ruleta: un boleto no vendido nunca puede ganar. Por eso la
+ruleta puede mostrar huecos en la numeración. `--validar` informa de los huecos
+que existen dentro del rango de números cargado.
+
 ---
 
 ## Uso
 
 | Acción | Cómo |
 |---|---|
-| Cargar un archivo | Botón azul **CARGAR ARCHIVO** (o tecla `C`) |
+| Cargar un archivo | Botón azul **CARGAR LISTA** (o tecla `C`) |
 | Girar | Botón azul **GIRAR** (o `Espacio`) |
-| Ver los ganadores | Botón azul **CARGAR RESULTADOS** (o `R`) |
+| Ver los ganadores | Botón azul **RESULTADOS** (o `R`) |
 | Cerrar la ventana del ganador | Un clic en cualquier parte (o `Espacio`) |
 | Salir | `Esc` |
 
@@ -92,23 +101,48 @@ Los números que ya han salido **se eliminan del sorteo**: la ruleta se
 reconstruye con los que quedan y cada persona puede ganar una sola vez. Cuando
 se agotan, el botón GIRAR se deshabilita y el panel indica "Sorteo finalizado".
 
-### Registro de ganadores
+### Modo de sorteo
 
-Cada ganador se añade al archivo `<tu_lista>_resultados.csv`, en la misma
+El botón **MODO** (o la tecla `M`) permite escribir cada cuántos giros gana uno:
+
+* `1`: gana cada número que sale.
+* `2`: sale un número que no gana y el siguiente gana.
+* `3`: salen dos números que no ganan y el tercero gana.
+
+El patrón se reinicia al cambiar el valor. La tarjeta de un número que salió
+pero no gana se muestra en gris, sin confeti, y el número se elimina para que
+no vuelva a salir. La pantalla indica si el próximo giro gana y cuántos
+números fueron eliminados sin ganar.
+
+La elección usa el generador pseudoaleatorio de Python. Un ordenador digital es
+determinista y trabaja con representación binaria, por lo que no produce azar
+físico verdadero: produce una secuencia pseudoaleatoria de muy buena calidad
+para este uso. La opción `--semilla` permite repetir exactamente una secuencia
+durante pruebas; en un sorteo normal no se fija ninguna semilla.
+
+### Registro de giros y ganadores
+
+Cada giro se añade al archivo `<tu_lista>_resultados.csv`, en la misma
 carpeta que el archivo de entrada:
 
 ```csv
-sesion,orden,numero,nombre,fecha_hora
-2026-10-13 22:00:33,1,6,Ernesto Valdés,2026-10-13 22:00:35
-2026-10-13 22:00:33,2,11,Yordanka Hernández,2026-10-13 22:00:38
+sesion,orden,numero,nombre,fecha_hora,resultado
+2026-10-13 22:00:33,1,6,Ernesto Valdés,2026-10-13 22:00:35,gana
+2026-10-13 22:00:33,2,11,Yordanka Hernández,2026-10-13 22:00:38,no_gana
 ```
 
-El registro **nunca se borra**: se acumula, y la columna `sesion` separa unas
-ejecuciones de otras. También se imprime en la terminal.
+El registro **nunca se borra**: se acumula, la columna `sesion` separa unas
+ejecuciones de otras y los registros antiguos sin `resultado` se completan
+automáticamente como `gana`. También se imprime en la terminal.
+
+El archivo `<tu_lista>_ganadores.csv` contiene únicamente los ganadores de la
+sesión actual, con el mismo formato `Número,Nombre` de una lista de entrada.
+Se puede cargar directamente para una segunda etapa del sorteo. Tanto este
+archivo como el registro de resultados se excluyen de git.
 
 ### Panel de resultados (proyectar/retransmitir)
 
-El botón **CARGAR RESULTADOS** abre el archivo de resultados con el diálogo del
+El botón **RESULTADOS** abre el archivo de resultados con el diálogo del
 sistema y muestra en pantalla la **lista de ganadores** en grande, pensada para
 proyectar o retransmitir:
 
@@ -147,9 +181,9 @@ encoge solo si no cabe en su recuadro.
 ### Adornos
 
 La ventana incluye una bandera cubana, una gran silueta del Che de fondo y los
-logos de las organizaciones indicadas en `LOGOS` (por defecto **BREP** y
-**FADEP**, en la carpeta `doc/`). Todo vive en `rifa/adornos.py` y se coloca
-solo, adaptándose al tamaño de la ventana.
+logos grandes y visibles de las organizaciones indicadas en `LOGOS` (por
+defecto **BREP** y **FADEP**, en la carpeta `doc/`). Todo vive en
+`rifa/adornos.py` y se coloca solo, adaptándose al tamaño de la ventana.
 
 La silueta del Che se toma de `RUTA_CHE` (por defecto `doc/che.svg`). El dibujo
 oscuro se recorta y se tiñe con `COLOR_CHE`, y el fondo claro se vuelve
@@ -165,6 +199,8 @@ LOGOS = [
     ("BREP", "doc/breplogo.jpeg"),
     ("FADEP", "doc/FadepLOGO.jpg"),
 ]
+LOGO_TAMANO_MAX = 190
+LOGO_ALTO_REL = 0.22
 ```
 
 Para añadir otra organización basta con agregar una tupla `(etiqueta, ruta)` a
