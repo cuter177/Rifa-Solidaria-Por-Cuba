@@ -21,9 +21,4 @@ if ! "$PY" -c "import vtk, openpyxl" >/dev/null 2>&1; then
     "$PY" -m pip install -r "$RAIZ/requirements.txt"
 fi
 
-# Si no se pasa archivo, se usa el ejemplo cuando existe.
-if [[ $# -eq 0 && -f "$RAIZ/ejemplos/participantes.csv" ]]; then
-    set -- "$RAIZ/ejemplos/participantes.csv"
-fi
-
 exec "$PY" "$RAIZ/main.py" "$@"

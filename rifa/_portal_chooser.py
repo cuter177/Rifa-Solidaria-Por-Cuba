@@ -6,6 +6,9 @@ PyGObject (``gi``). Al usar ``org.freedesktop.portal.FileChooser`` el cuadro de
 dialogo es el del sistema; en KDE es el mismo del gestor de archivos (Dolphin),
 de modo que no hace falta dibujar una ventana propia.
 
+Con ``--guardar`` se usa el metodo ``SaveFile`` (dialogo de guardado, con su
+propia confirmacion de sobrescritura) en vez de ``OpenFile``.
+
 Codigos de salida:
     0  el usuario eligio un archivo; su ruta se imprime en stdout
     1  el usuario cancelo
@@ -49,6 +52,10 @@ def _opciones(args):
         opciones["accept_label"] = GLib.Variant("s", args.etiqueta)
     if args.inicial and os.path.isdir(args.inicial):
         opciones["current_folder"] = GLib.Variant("ay", os.fsencode(args.inicial))
+    if args.nombre:
+        opciones["current_name"] = GLib.Variant(
+            "s", os.path.basename(args.nombre)
+        )
     return opciones
 
 
@@ -63,6 +70,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="Texto del boton de aceptar")
     parser.add_argument("--carpeta", action="store_true",
                         help="Elegir una carpeta en vez de un archivo")
+    parser.add_argument("--guardar", action="store_true",
+                        help="Dialogo de guardado (SaveFile) en vez de apertura")
+    parser.add_argument("--nombre", default="",
+                        help="Nombre de archivo sugerido (current_name)")
     args = parser.parse_args(argv)
 
     try:
@@ -108,11 +119,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
+        metodo = "SaveFile" if args.guardar else "OpenFile"
         bus.call_sync(
             "org.freedesktop.portal.Desktop",
             "/org/freedesktop/portal/desktop",
             "org.freedesktop.portal.FileChooser",
-            "OpenFile",
+            metodo,
             GLib.Variant("(ssa{sv})", ("", args.titulo, opciones)),
             None,
             Gio.DBusCallFlags.NONE,

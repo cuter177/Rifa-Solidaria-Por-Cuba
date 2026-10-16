@@ -27,6 +27,7 @@ CAB_NOMBRE = {
 CAB_RES_SESION = {"sesion", "sesión", "session", "ronda", "sorteo"}
 CAB_RES_ORDEN = {"orden", "order", "puesto", "posicion", "posición", "turno"}
 CAB_RES_FECHA = {"fecha_hora", "fecha", "hora", "date", "timestamp", "cuando", "momento"}
+CAB_RES_RESULTADO = {"resultado", "result", "estado", "status"}
 
 EXTENSIONES_CSV = {".csv", ".txt", ".tsv"}
 EXTENSIONES_EXCEL = {".xlsx", ".xlsm", ".xltx", ".xltm"}
@@ -54,6 +55,7 @@ class Ganador:
     numero: int
     nombre: str
     fecha_hora: str = ""
+    resultado: str = "gana"
 
     def __str__(self) -> str:  # pragma: no cover - solo depuracion
         return f"{self.orden}. Nº {self.numero} {self.nombre}"
@@ -275,9 +277,11 @@ def resumen(participantes: list[Participante]) -> str:
     if not participantes:
         return "Sin participantes cargados"
     numeros = [p.numero for p in participantes]
+    faltantes = set(range(min(numeros), max(numeros) + 1)) - set(numeros)
+    aviso = f" ({len(faltantes)} sin vender)" if faltantes else ""
     return (
         f"{len(participantes)} participantes · "
-        f"numeros {min(numeros)} a {max(numeros)}"
+        f"numeros {min(numeros)} a {max(numeros)}{aviso}"
     )
 
 
@@ -289,20 +293,65 @@ def ruta_registro(ruta_entrada: str) -> str:
     return os.path.join(carpeta, f"{base}_resultados.csv")
 
 
-def registrar_ganador(ruta_entrada: str, sesion: str, orden: int,
-                      participante: Participante) -> str:
-    """Anade una linea al registro de ganadores y devuelve la ruta usada.
+def ruta_ganadores(ruta_entrada: str) -> str:
+    """Archivo de ganadores de la sesion actual, en formato de participantes."""
+    ruta_abs = os.path.abspath(ruta_entrada)
+    carpeta = os.path.dirname(ruta_abs) or os.getcwd()
+    base = os.path.splitext(os.path.basename(ruta_abs))[0] or "rifa"
+    return os.path.join(carpeta, f"{base}_ganadores.csv")
 
-    El registro se acumula entre sesiones (nunca se borra: en una rifa real
-    interesa conservar el historial), por eso cada linea lleva la sesion a la
-    que pertenece.
+
+def guardar_ganadores_en(ruta_destino: str, ganadores) -> str:
+    """Escribe ``ganadores`` en ``ruta_destino`` con el formato de una lista.
+
+    Se conserva **el orden recibido**: quien apila (pantalla, auto-guardado)
+    pasa la lista del mas reciente al mas antiguo y asi queda en el archivo.
+    Funciona tanto con ``Participante`` como con ``Ganador``.
     """
+    with open(ruta_destino, "w", newline="", encoding="utf-8") as fh:
+        escritor = csv.writer(fh)
+        escritor.writerow(["Número", "Nombre"])
+        escritor.writerows((p.numero, p.nombre) for p in ganadores)
+    return ruta_destino
+
+
+def guardar_ganadores(ruta_entrada: str, ganadores) -> str:
+    """Reescribe los ganadores actuales como una lista de participantes."""
+    return guardar_ganadores_en(ruta_ganadores(ruta_entrada), ganadores)
+
+
+def _migrar_registro_resultados(destino: str):
+    """Completa registros antiguos con la columna ``resultado``."""
+    if not os.path.exists(destino) or os.path.getsize(destino) == 0:
+        return
+    with open(destino, "r", newline="", encoding="utf-8-sig") as fh:
+        filas = list(csv.reader(fh))
+    if not filas:
+        return
+    cabeceras = {_normalizar_cabecera(celda) for celda in filas[0]}
+    if "resultado" in cabeceras or "result" in cabeceras:
+        return
+    filas[0].append("resultado")
+    for fila in filas[1:]:
+        fila.append("gana")
+    with open(destino, "w", newline="", encoding="utf-8") as fh:
+        csv.writer(fh).writerows(filas)
+
+
+def registrar_resultado(ruta_entrada: str, sesion: str, orden: int,
+                        participante: Participante,
+                        resultado: str = "gana") -> str:
+    """Anade un giro al registro acumulado y devuelve la ruta usada."""
+    resultado = "no_gana" if resultado == "no_gana" else "gana"
     destino = ruta_registro(ruta_entrada)
-    nuevo = not os.path.exists(destino)
+    _migrar_registro_resultados(destino)
+    nuevo = not os.path.exists(destino) or os.path.getsize(destino) == 0
     with open(destino, "a", newline="", encoding="utf-8") as fh:
         escritor = csv.writer(fh)
         if nuevo:
-            escritor.writerow(["sesion", "orden", "numero", "nombre", "fecha_hora"])
+            escritor.writerow([
+                "sesion", "orden", "numero", "nombre", "fecha_hora", "resultado",
+            ])
         escritor.writerow(
             [
                 sesion,
@@ -310,9 +359,16 @@ def registrar_ganador(ruta_entrada: str, sesion: str, orden: int,
                 participante.numero,
                 participante.nombre,
                 _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                resultado,
             ]
         )
     return destino
+
+
+def registrar_ganador(ruta_entrada: str, sesion: str, orden: int,
+                      participante: Participante) -> str:
+    """Compatibilidad: registra un ganador con el formato nuevo."""
+    return registrar_resultado(ruta_entrada, sesion, orden, participante, "gana")
 
 
 # ---------------------------------------------------------------------------
@@ -336,12 +392,14 @@ def _filas_de_archivo(ruta: str) -> list[list]:
     )
 
 
-def cargar_resultados(ruta: str) -> list[Ganador]:
+def cargar_resultados(ruta: str, solo_ganadores: bool = True) -> list[Ganador]:
     """Lee un archivo de resultados y devuelve sus ganadores en orden.
 
     Acepta el archivo que genera la propia rifa
-    (``sesion,orden,numero,nombre,fecha_hora``) y es flexible con las
-    cabeceras y el orden de las columnas.
+    (``sesion,orden,numero,nombre,fecha_hora,resultado``) y es flexible con
+    las cabeceras y el orden de las columnas. Los giros ``no_gana`` se
+    conservan en el registro, pero no se muestran como ganadores: con
+    ``solo_ganadores=False`` se devuelven tambien (campo ``resultado``).
     """
     if not os.path.exists(ruta):
         raise ErrorDatos(f"No existe el archivo:\n{ruta}")
@@ -355,7 +413,8 @@ def cargar_resultados(ruta: str) -> list[Ganador]:
         raise ErrorDatos("El archivo de resultados no contiene ninguna linea.")
 
     indices: dict[str, int | None] = {
-        "sesion": None, "orden": None, "numero": None, "nombre": None, "fecha": None,
+        "sesion": None, "orden": None, "numero": None, "nombre": None,
+        "fecha": None, "resultado": None,
     }
     conocidas = 0
     for posicion, celda in enumerate(filas[0]):
@@ -366,6 +425,7 @@ def cargar_resultados(ruta: str) -> list[Ganador]:
             ("numero", CAB_NUMERO),
             ("nombre", CAB_NOMBRE),
             ("fecha", CAB_RES_FECHA),
+            ("resultado", CAB_RES_RESULTADO),
         ):
             if indices[campo] is None and clave in cabeceras:
                 indices[campo] = posicion
@@ -379,10 +439,11 @@ def cargar_resultados(ruta: str) -> list[Ganador]:
         if n_columnas <= 2 and _parece_numerica(filas, 0) >= 0.6:
             # Un simple "numero,nombre" sin cabecera.
             indices = {"sesion": None, "orden": None, "numero": 0,
-                       "nombre": 1, "fecha": None}
+                       "nombre": 1, "fecha": None, "resultado": None}
         else:
             # Se asume el orden que escribe la rifa.
-            indices = {"sesion": 0, "orden": 1, "numero": 2, "nombre": 3, "fecha": 4}
+            indices = {"sesion": 0, "orden": 1, "numero": 2, "nombre": 3,
+                       "fecha": 4, "resultado": 5}
 
     ganadores: list[Ganador] = []
     for fila in (filas[1:] if hay_cabecera else filas):
@@ -391,6 +452,10 @@ def cargar_resultados(ruta: str) -> list[Ganador]:
         if not nombre and numero is None:
             continue
         orden = _a_entero(_celda(fila, indices["orden"]))
+        resultado = _texto(_celda(fila, indices["resultado"])).lower()
+        no_gana = resultado in {"no_gana", "no gana", "no-gana", "eliminado"}
+        if solo_ganadores and no_gana:
+            continue
         ganadores.append(
             Ganador(
                 sesion=_texto(_celda(fila, indices["sesion"])),
@@ -398,6 +463,7 @@ def cargar_resultados(ruta: str) -> list[Ganador]:
                 numero=numero if numero is not None else 0,
                 nombre=nombre,
                 fecha_hora=_texto(_celda(fila, indices["fecha"])),
+                resultado="no_gana" if no_gana else "gana",
             )
         )
 
@@ -409,8 +475,13 @@ def cargar_resultados(ruta: str) -> list[Ganador]:
     return ganadores
 
 
-def agrupar_por_sesion(ganadores: list[Ganador]) -> list[tuple[str, list[Ganador]]]:
-    """Agrupa los ganadores por sesion, respetando el orden de aparicion."""
+def agrupar_por_sesion(ganadores: list[Ganador],
+                       pila: bool = False) -> list[tuple[str, list[Ganador]]]:
+    """Agrupa los ganadores por sesion, respetando el orden de aparicion.
+
+    Con ``pila=True`` cada sesion se invierte: queda el **mas reciente
+    arriba** (forma de pila), que es como se rifa de peor premio a mejor.
+    """
     grupos: list[tuple[str, list[Ganador]]] = []
     for ganador in ganadores:
         clave = ganador.sesion or "Resultados"
@@ -419,4 +490,101 @@ def agrupar_por_sesion(ganadores: list[Ganador]) -> list[tuple[str, list[Ganador
         grupos[-1][1].append(ganador)
     for _, lista in grupos:
         lista.sort(key=lambda g: g.orden)
+        if pila:
+            lista.reverse()
     return grupos
+
+
+# ---------------------------------------------------------------------------
+# Continuacion de una sesion interrumpida
+# ---------------------------------------------------------------------------
+@dataclass
+class Continuidad:
+    """Estado de una sesion anterior guardado en los archivos de la rifa."""
+
+    ganadores: list[Participante]
+    eliminados: list[Participante]
+    sesion: str = ""
+    giros: int = 0
+    contador_modo: int = 0
+    cada_cuantos: int | None = None
+
+
+def candidatos_cada_cuantos(filas: list[Ganador]) -> list[int]:
+    """Valores de "cada cuantos giros gana uno" compatibles con ``filas``.
+
+    Un giro ``s`` (1-based) gana si y solo si ``s % cada == 0``; se devuelven
+    todos los ``cada`` de 1 a 99 que explican toda la secuencia observada.
+    """
+    observados = [(g.orden, g.resultado != "no_gana")
+                  for g in filas if g.orden and g.orden > 0]
+    if not observados:
+        return []
+    return [
+        cada for cada in range(1, 100)
+        if all((orden % cada == 0) == gana for orden, gana in observados)
+    ]
+
+
+def inferir_cada_cuantos(filas: list[Ganador]) -> int | None:
+    """El unico valor compatible con la sesion, o ``None`` si es ambiguo."""
+    candidatos = candidatos_cada_cuantos(filas)
+    return candidatos[0] if len(candidatos) == 1 else None
+
+
+def leer_continuidad(ruta_lista: str) -> Continuidad | None:
+    """Lee el estado pendiente de ``ruta_lista`` para poder continuarla.
+
+    Cruza ``<lista>_ganadores.csv`` (guardado en **pila**, mas reciente
+    arriba) con la ultima sesion de ``<lista>_resultados.csv``: si los
+    numeros coinciden se recuperan tambien los eliminados (``no_gana``),
+    la sesion y el contador de giros. Los ganadores y eliminados se
+    devuelven en **orden cronologico**, que es como los guarda la app en
+    memoria. Devuelve ``None`` si no hay nada que continuar.
+    """
+    destino = ruta_ganadores(ruta_lista)
+    if not os.path.exists(destino) or os.path.getsize(destino) == 0:
+        return None
+    try:
+        filas = cargar_resultados(destino)
+    except (ErrorDatos, OSError):
+        return None
+    archivo = [Participante(g.numero, g.nombre) for g in filas if g.nombre]
+    if not archivo:
+        return None
+
+    sesion = ""
+    ganadores = list(reversed(archivo))     # pila -> cronologico
+    eliminados: list[Participante] = []
+    giros = len(archivo)
+    cada: int | None = None
+
+    registro = ruta_registro(ruta_lista)
+    if os.path.exists(registro):
+        try:
+            todas = cargar_resultados(registro, solo_ganadores=False)
+        except (ErrorDatos, OSError):
+            todas = []
+        grupos = agrupar_por_sesion(todas)
+        if grupos:
+            _, ultima = grupos[-1]
+            gana = [g for g in ultima if g.resultado != "no_gana"]
+            if {g.numero for g in gana} == {g.numero for g in archivo}:
+                # El registro manda: orden cronologico de verdad.
+                ganadores = [Participante(g.numero, g.nombre) for g in gana]
+                sesion = ultima[0].sesion
+                eliminados = [
+                    Participante(g.numero, g.nombre)
+                    for g in ultima if g.resultado == "no_gana"
+                ]
+                giros = max(len(ultima), max((g.orden for g in ultima), default=0))
+                cada = inferir_cada_cuantos(ultima)
+
+    return Continuidad(
+        ganadores=ganadores,
+        eliminados=eliminados,
+        sesion=sesion,
+        giros=giros,
+        contador_modo=giros,
+        cada_cuantos=cada,
+    )

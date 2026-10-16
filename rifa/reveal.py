@@ -8,7 +8,7 @@ import random
 import vtk
 
 from . import config
-from .widgets import Rect2D, Texto
+from .widgets import Boton, Rect2D, Texto
 
 
 # ---------------------------------------------------------------------------
@@ -85,12 +85,28 @@ class Tarjeta:
         self.centro = (ancho_pantalla / 2.0, alto_pantalla * 0.5)
         self.colocar(1.0)
 
-    def preparar(self, numero: int, nombre: str):
+    def preparar(self, numero: int, nombre: str, gana: bool = True):
         """Fija el contenido y calcula los tamanos de fuente definitivos."""
         ancho_util = self.ancho * 0.82
-        self._titulo.fijar("¡HA SALIDO EL NÚMERO!")
-        self._numero.fijar(f"Nº {numero}")
+        if gana:
+            color_borde = config.COLOR_TARJETA_BORDE
+            color_fondo = config.COLOR_TARJETA
+            color_numero = config.DORADO
+            titulo = "¡HA SALIDO EL NÚMERO!"
+            pie = "Clic para continuar"
+        else:
+            color_borde = config.COLOR_TARJETA_BORDE_NO_GANA
+            color_fondo = config.COLOR_TARJETA_NO_GANA
+            color_numero = config.COLOR_NO_GANA
+            titulo = "¡NÚMERO NO GANADOR!"
+            pie = "NO GANA · CONTINÚA EL SORTEO"
+        self._borde.color(color_borde)
+        self._fondo.color(color_fondo)
+        self._titulo.fijar(titulo, color=color_numero)
+        self._numero.fijar(f"Nº {numero}", color=color_numero)
+        self._separador.color(color_borde)
         self._nombre.fijar(nombre, px=int(self.alto * 0.132))
+        self._pie.fijar(pie)
         self._nombre.envolver_a(self.ancho * 0.80, lineas_max=2)
 
         self._px_titulo = self._titulo.ajustar_a(ancho_util, int(self.alto * 0.082), px_min=8)
@@ -269,6 +285,10 @@ class Historial:
         self._x_num = self._x_nombre = 0.0
         self._y_centro = 0.0
         self._paso = 1.0
+        self._px_sub = config.FUENTE_HIST_SUBTITULO
+        self._px_pie = config.FUENTE_HIST_PIE
+        self._ancho_sub = 800.0
+        self._ancho_pie = 600.0
 
         self._velo = Rect2D(renderer, config.COLOR_SOMBRA, radio=0)
         self._borde = Rect2D(renderer, config.COLOR_TARJETA_BORDE, radio=36)
@@ -289,6 +309,14 @@ class Historial:
         ]
         self._pie = Texto(renderer, "", config.FUENTE_HIST_PIE,
                           config.COLOR_HUD, negrita=False)
+        # Se anade el ultimo: el boton de guardar queda por encima del resto.
+        self._btn_guardar = Boton(
+            renderer, "GUARDAR CSV", config.FUENTE_HIST_PIE,
+            config.AZUL_BOTON, config.AZUL_BOTON_HOVER,
+            config.AZUL_BOTON_OFF, config.COLOR_TEXTO_BOTON,
+            config.COLOR_TEXTO_BOTON_OFF, config.AZUL_BOTON_BORDE,
+            radio=14, altura=54,
+        )
         self.visible(False)
 
     # ------------------------------------------------------------------
@@ -307,12 +335,26 @@ class Historial:
 
         self._titulo.fijar(px=int(max(20, min(config.FUENTE_HIST_TITULO, h * 0.085))),
                            pos=(ancho / 2.0, y + h * 0.925))
+        self._px_sub = int(max(14, min(config.FUENTE_HIST_SUBTITULO, h * 0.052)))
+        self._ancho_sub = max(200.0, w * 0.92)
         self._subtitulo.fijar(
-            px=int(max(14, min(config.FUENTE_HIST_SUBTITULO, h * 0.052))),
+            px=self._px_sub,
             pos=(ancho / 2.0, y + h * 0.855),
         )
-        self._pie.fijar(px=int(max(12, min(config.FUENTE_HIST_PIE, h * 0.044))),
-                        pos=(ancho / 2.0, y + h * 0.055))
+
+        # Boton de guardar: esquina inferior derecha de la tarjeta, dentro de
+        # la banda libre que queda por debajo de las filas.
+        alto_btn = max(40.0, h * 0.082)
+        ancho_btn = max(170.0, w * 0.24)
+        bx = x + w - 14.0 - ancho_btn
+        by = max(y + 10.0, y + h * 0.055 - alto_btn / 2.0)
+        self._btn_guardar.colocar(bx, by, ancho_btn, alto_btn)
+
+        # El pie se centra en el hueco que queda a la izquierda del boton.
+        self._px_pie = int(max(12, min(config.FUENTE_HIST_PIE, h * 0.044)))
+        self._ancho_pie = max(160.0, bx - 14.0 - (x + 14.0))
+        self._pie.fijar(px=self._px_pie,
+                        pos=(x + 14.0 + self._ancho_pie / 2.0, y + h * 0.055))
 
         # Zona de filas: tantas como quepan con comodidad.
         arriba = y + h * 0.795
@@ -329,10 +371,18 @@ class Historial:
             nombre.fijar(px=self.px_fila)
 
     # ------------------------------------------------------------------
-    def mostrar(self, titulo: str, subtitulo: str, filas, pie: str):
+    def mostrar(self, titulo: str, subtitulo: str, filas, pie: str,
+                aviso: str = "", aviso_color=config.DORADO):
         self._titulo.fijar(titulo)
-        self._subtitulo.fijar(subtitulo)
+        texto_sub = subtitulo
+        if aviso:
+            texto_sub = f"{subtitulo}   ·   {aviso}" if subtitulo else aviso
+            self._subtitulo.fijar(texto_sub, color=aviso_color)
+        else:
+            self._subtitulo.fijar(texto_sub, color=config.COLOR_HUD)
+        self._subtitulo.ajustar_a(self._ancho_sub, self._px_sub, px_min=12)
         self._pie.fijar(pie)
+        self._pie.ajustar_a(self._ancho_pie, self._px_pie, px_min=11)
 
         limite = self._x_card + self._w_card * 0.95
         ancho_nombre = max(80.0, limite - self._x_nombre)
@@ -355,8 +405,25 @@ class Historial:
                 nombre.visibilidad(False)
 
     # ------------------------------------------------------------------
+    def contiene_guardar(self, px, py) -> bool:
+        """True si el punto cae dentro del boton de guardar (area)."""
+        return bool(self._btn_guardar.contiene(px, py))
+
+    def pasar_encima(self, px, py) -> bool:
+        """Actualiza el resaltado del boton; devuelve True si cambio algo."""
+        dentro = self._btn_guardar.habilitado and self._btn_guardar.contiene(px, py)
+        antes = self._btn_guardar.hover
+        self._btn_guardar.pasar_encima(dentro)
+        return antes != self._btn_guardar.hover
+
+    def guardar_habilitado(self, valor: bool):
+        self._btn_guardar.habilitar(bool(valor))
+
+    # ------------------------------------------------------------------
     def visible(self, valor: bool):
         valor = bool(valor)
+        if not valor:
+            self._btn_guardar.pasar_encima(False)
         for pieza in (self._velo, self._borde, self._fondo):
             pieza.visibilidad(valor)
         for texto in (self._titulo, self._subtitulo, self._pie):
@@ -364,3 +431,4 @@ class Historial:
         for numero, nombre in zip(self._numeros, self._nombres):
             numero.visibilidad(valor)
             nombre.visibilidad(valor)
+        self._btn_guardar.visibilidad(valor)

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 import random
+import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -295,10 +297,202 @@ def test_integracion_ejemplos():
         comprobar(sorted(ganados) == sorted(numeros), f"{nombre}: todos ganan una vez")
 
 
+# ---------------------------------------------------------------------------
+def test_pila_guardado_y_continuidad():
+    seccion("pila, guardado y continuacion")
+    tmp = tempfile.mkdtemp(prefix="rifa_pila_")
+
+    def fila(sesion, orden, numero, nombre, resultado="gana"):
+        return datos.Ganador(sesion, orden, numero, nombre, "", resultado)
+
+    # -- forma de pila: lo mas reciente arriba dentro de cada sesion --------
+    filas = [fila("s1", 1, 5, "Pedro"), fila("s1", 2, 9, "Ana"),
+             fila("s2", 1, 3, "José")]
+    grupos = datos.agrupar_por_sesion(filas, pila=True)
+    comprobar(len(grupos) == 2, "dos sesiones al agrupar")
+    comprobar([g.numero for g in grupos[0][1]] == [9, 5], "s1 en forma de pila")
+    comprobar([g.numero for g in grupos[1][1]] == [3], "s2 en forma de pila")
+    cronologico = datos.agrupar_por_sesion(filas)
+    comprobar([g.numero for g in cronologico[0][1]] == [5, 9],
+              "por defecto sigue en orden cronologico")
+    comprobar(grupos[-1][0] == "s2", "la sesion mas reciente sigue al final")
+
+    # -- el archivo se escribe con el orden que se le da -------------------
+    lista = [datos.Participante(n, f"Persona {n}") for n in (1, 2, 3)]
+    entrada = os.path.join(tmp, "lista.csv")
+    _escribir(entrada, "numero,nombre\n1,Persona 1\n2,Persona 2\n3,Persona 3\n")
+    destino = datos.guardar_ganadores(entrada, list(reversed(lista)))
+    comprobar(destino == datos.ruta_ganadores(entrada),
+              "guardar_ganadores usa <lista>_ganadores.csv")
+    with open(destino, encoding="utf-8") as fh:
+        lineas = fh.read().strip().splitlines()
+    comprobar(lineas[0] == "Número,Nombre", f"cabecera, hay {lineas[0]!r}")
+    comprobar(lineas[1].startswith("3,"), f"el mas reciente primero: {lineas[1]!r}")
+    comprobar(len(lineas) == 4, "cabecera + 3 ganadores")
+
+    # El mismo archivo sirve como lista de participantes y como resultados.
+    recargada = datos.cargar(destino)
+    comprobar([p.numero for p in recargada] == [1, 2, 3],
+              "se puede recargar como lista de participantes")
+    como_resultados = datos.cargar_resultados(destino)
+    comprobar([g.numero for g in como_resultados] == [3, 2, 1],
+              "y se puede abrir en la pantalla de resultados (pila)")
+
+    # -- leer el registro incluyendo los giros que no ganan ----------------
+    reg = os.path.join(tmp, "r_resultados.csv")
+    _escribir(
+        reg,
+        "sesion,orden,numero,nombre,fecha_hora,resultado\n"
+        "s1,1,5,Pedro,t,gana\n"
+        "s1,2,9,Ana,t,no_gana\n",
+    )
+    todos = datos.cargar_resultados(reg, solo_ganadores=False)
+    comprobar(len(todos) == 2, f"solo_ganadores=False devuelve 2, hay {len(todos)}")
+    comprobar(todos[1].resultado == "no_gana", "conserva el campo resultado")
+    comprobar(len(datos.cargar_resultados(reg)) == 1, "por defecto solo ganadores")
+
+    # -- inferencia del modo "cada cuantos giros gana uno" -----------------
+    def secuencia(patrones):
+        return [fila("s", i + 1, i + 1, f"p{i + 1}", resultado)
+                for i, resultado in enumerate(patrones)]
+
+    comprobar(datos.inferir_cada_cuantos(secuencia(["gana"])) == 1, "modo 1")
+    comprobar(datos.inferir_cada_cuantos(
+        secuencia(["no_gana", "gana"])) == 2, "modo 2")
+    comprobar(datos.inferir_cada_cuantos(
+        secuencia(["no_gana", "no_gana", "gana"])) == 3, "modo 3")
+    comprobar(datos.inferir_cada_cuantos(
+        secuencia(["no_gana"] * 3 + ["gana"] + ["no_gana"] * 3 + ["gana"])) == 4,
+        "modo 4 con dos ciclos")
+    comprobar(datos.inferir_cada_cuantos(secuencia(["no_gana", "no_gana"])) is None,
+              "patron incompleto -> ambiguo (None)")
+    comprobar(datos.inferir_cada_cuantos([]) is None, "sin giros -> None")
+
+    # -- continuacion de una sesion interrumpida ---------------------------
+    lista2 = os.path.join(tmp, "continuar.csv")
+    _escribir(lista2, "numero,nombre\n1,Ana\n2,Bea\n3,Caro\n4,Dana\n")
+    comprobar(datos.leer_continuidad(lista2) is None,
+              "sin archivo de ganadores no hay nada que continuar")
+
+    # Sin registro, el archivo en pila se devuelve en orden cronologico.
+    gente = datos.cargar(lista2)
+    datos.guardar_ganadores(lista2, [gente[3], gente[1]])   # pila: 4, 2
+    solo_archivo = datos.leer_continuidad(lista2)
+    comprobar([g.numero for g in solo_archivo.ganadores] == [2, 4],
+              "pila del archivo -> cronologico en memoria")
+    comprobar(solo_archivo.sesion == "", "sin registro no hay sesion")
+
+    datos.registrar_resultado(lista2, "S-1", 1, gente[0], "no_gana")
+    datos.registrar_resultado(lista2, "S-1", 2, gente[1], "gana")
+    datos.registrar_resultado(lista2, "S-1", 3, gente[2], "no_gana")
+    datos.registrar_resultado(lista2, "S-1", 4, gente[3], "gana")
+    datos.guardar_ganadores(lista2, [gente[3], gente[1]])   # ya en pila
+
+    c = datos.leer_continuidad(lista2)
+    comprobar(c is not None, "hay continuidad con registro")
+    comprobar([g.numero for g in c.ganadores] == [2, 4],
+              "ganadores en orden cronologico (el registro manda)")
+    comprobar([g.numero for g in c.eliminados] == [1, 3],
+              "eliminados recuperados del registro")
+    comprobar(c.sesion == "S-1", f"sesion recuperada: {c.sesion!r}")
+    comprobar(c.giros == 4 and c.contador_modo == 4, "contador de giros")
+    comprobar(c.cada_cuantos == 2, f"modo inferido: {c.cada_cuantos}")
+
+    # Ganadores que no coinciden con el registro: no se inventa nada.
+    datos.guardar_ganadores(lista2, [gente[0]])
+    c2 = datos.leer_continuidad(lista2)
+    comprobar(c2 is not None, "sigue habiendo continuidad")
+    comprobar(c2.sesion == "", "sin coincidencia no se recupera la sesion")
+    comprobar(c2.eliminados == [], "sin coincidencia no hay eliminados")
+    comprobar(c2.cada_cuantos is None, "sin coincidencia el modo es desconocido")
+    comprobar(c2.ganadores[0].numero == 1, "pero los ganadores se conservan")
+
+
+# ---------------------------------------------------------------------------
+def test_dialogos_guardado():
+    seccion("dialogo de guardado (sin abrir ventanas)")
+    from rifa import archivos
+
+    llamadas: list[list[str]] = []
+    respuestas: list[str] = []      # rutas que "elige" el usuario
+
+    class _Resultado:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _falso_run(argumentos, **kwargs):
+        argumentos = [str(a) for a in argumentos]
+        llamadas.append(argumentos)
+        res = _Resultado()
+        res.stdout = respuestas[-1] if respuestas else ""
+        if any("_portal_chooser.py" in a for a in argumentos):
+            res.returncode = 3          # el portal no esta disponible
+        if kwargs.get("check") and res.returncode != 0:
+            raise subprocess.CalledProcessError(res.returncode, argumentos)
+        return res
+
+    original_which, original_run = shutil.which, subprocess.run
+    original_preguntar = archivos.preguntar
+    respaldo_preguntar: list[bool | None] = []
+    try:
+        shutil.which = lambda n: "/usr/bin/zenity" if n == "zenity" else original_which(n)
+        subprocess.run = _falso_run
+        archivos.preguntar = lambda t, m: respaldo_preguntar.append(True) or True
+
+        ruta = archivos.guardar_archivo(
+            "Guardar ganadores", "/tmp/ganadores.csv",
+            archivos.FILTRO_GANADORES, "/tmp",
+        )
+        comprobar(ruta == "", "cancelar el dialogo devuelve cadena vacia")
+        comprobar(not respaldo_preguntar, "sin archivo no se pregunta por sobrescribir")
+
+        # El portal se invoca con el metodo de guardado y el nombre propuesto.
+        portal = [c for c in llamadas
+                  if any("_portal_chooser.py" in a for a in c)]
+        comprobar(len(portal) == 1, "se prueba primero el portal de escritorio")
+        if portal:
+            comprobar("--guardar" in portal[0],
+                      f"el portal usa SaveFile: {portal[0]}")
+            comprobar("--nombre" in portal[0] and "ganadores.csv" in portal[0],
+                      "el portal lleva el nombre propuesto")
+
+        zenity = [c for c in llamadas if c and "zenity" in c[0]]
+        comprobar(len(zenity) == 1, f"se usa zenity como backend: {llamadas}")
+        comando = zenity[0]
+        comprobar("--save" in comando, f"es un dialogo de guardado: {comando}")
+        comprobar("--confirm-overwrite" not in comando,
+                  "no pasa la opcion obsoleta de zenity")
+        comprobar("--filename=/tmp/ganadores.csv" in comando,
+                  f"sugiere el nombre de archivo: {comando}")
+        comprobar("--title=Guardar ganadores" in comando, "lleva el titulo")
+
+        # Si el archivo elegido ya existe, se pregunta antes de pisarlo.
+        destino = os.path.join(tempfile.mkdtemp(prefix="rifa_guard_"), "y.csv")
+        _escribir(destino, "Número,Nombre\n1,Ana\n")
+        respuestas.append(destino)
+        respaldo_preguntar.clear()
+        archivos.preguntar = lambda t, m: respaldo_preguntar.append(False) or False
+        ruta = archivos.guardar_archivo("Guardar ganadores", destino, None, None)
+        comprobar(ruta == "", "responder no a sobrescribir cancela el guardado")
+        comprobar(len(respaldo_preguntar) == 1, "se pregunta si el archivo existe")
+
+        archivos.preguntar = lambda t, m: respaldo_preguntar.append(True) or True
+        ruta = archivos.guardar_archivo("Guardar ganadores", destino, None, None)
+        comprobar(ruta == destino, "responder si deja guardar")
+    finally:
+        shutil.which = original_which
+        subprocess.run = original_run
+        archivos.preguntar = original_preguntar
+
+
+# ---------------------------------------------------------------------------
 def main() -> int:
     test_geometria()
     test_datos()
     test_resultados()
+    test_pila_guardado_y_continuidad()
+    test_dialogos_guardado()
     test_integracion_ejemplos()
     print()
     if fallos:

@@ -27,28 +27,47 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _archivo_automatico() -> str | None:
+    """Devuelve la lista privada real o, si no existe, el ejemplo."""
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for nombre in ("rifa-solidaria-por-cuba.csv", "ejemplos/participantes.csv"):
+        ruta = os.path.join(raiz, nombre)
+        if os.path.exists(ruta):
+            return ruta
+    return None
+
+
 def principal(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
 
     from . import datos
 
-    if args.archivo:
-        if not os.path.exists(args.archivo):
-            print(f"ERROR: no existe el archivo '{args.archivo}'", file=sys.stderr)
-            return 2
+    ruta = args.archivo or _archivo_automatico()
+    if args.archivo and not os.path.exists(args.archivo):
+        print(f"ERROR: no existe el archivo '{args.archivo}'", file=sys.stderr)
+        return 2
+
+    if ruta:
         try:
-            participantes = datos.cargar(args.archivo)
+            participantes = datos.cargar(ruta)
         except datos.ErrorDatos as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            return 2
-        print(f"OK: {datos.resumen(participantes)}")
-        if args.validar:
-            ancho = max((len(p.nombre) for p in participantes), default=0)
-            for p in participantes[:20]:
-                print(f"  {p.numero:>5}  {p.nombre}")
-            if len(participantes) > 20:
-                print(f"  ... y {len(participantes) - 20} mas")
-            return 0
+            if args.archivo:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                return 2
+            print(f"AVISO: no se pudo cargar '{ruta}': {exc}", file=sys.stderr)
+            ruta = None
+        else:
+            print(f"OK: {datos.resumen(participantes)}")
+            if args.validar:
+                for p in participantes[:20]:
+                    print(f"  {p.numero:>5}  {p.nombre}")
+                if len(participantes) > 20:
+                    print(f"  ... y {len(participantes) - 20} mas")
+                return 0
+
+    if args.validar:
+        print("OK: no hay una lista automatica para validar")
+        return 0
 
     try:
         import vtk  # noqa: F401
@@ -62,7 +81,7 @@ def principal(argv: list[str] | None = None) -> int:
 
     from .app import RifaApp
 
-    app = RifaApp(args.archivo)
+    app = RifaApp(ruta)
     if args.semilla is not None:
         import random
         app.rng = random.Random(args.semilla)

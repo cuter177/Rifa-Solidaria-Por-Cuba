@@ -34,6 +34,10 @@ FILTRO_RESULTADOS = [
     ("Resultados (Excel)", "*.xlsx *.xlsm"),
     ("Todos los archivos", "*"),
 ]
+FILTRO_GANADORES = [
+    ("Ganadores (CSV)", "*.csv *.txt *.tsv"),
+    ("Todos los archivos", "*"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -77,14 +81,20 @@ def _interprete_con_gi() -> str | None:
 # ---------------------------------------------------------------------------
 # Dialogos
 # ---------------------------------------------------------------------------
-def _por_portal(titulo, filtros, carpeta):
+def _por_portal(titulo, filtros, carpeta, guardar=False, nombre="", etiqueta=None):
     interprete = _interprete_con_gi()
     if not interprete:
         return False, ""
 
     argumentos = [interprete, _PORTAL, "--titulo", titulo]
-    for etiqueta, patrones in filtros or []:
-        argumentos += ["--filtro", f"{etiqueta}={patrones}"]
+    if guardar:
+        argumentos.append("--guardar")
+        if etiqueta:
+            argumentos += ["--etiqueta", etiqueta]
+        if nombre:
+            argumentos += ["--nombre", nombre]
+    for etiqueta_f, patrones in filtros or []:
+        argumentos += ["--filtro", f"{etiqueta_f}={patrones}"]
     if carpeta:
         argumentos += ["--inicial", carpeta]
 
@@ -102,25 +112,39 @@ def _por_portal(titulo, filtros, carpeta):
     return False, ""             # portal no disponible: se prueba otro metodo
 
 
-def _por_zenity(titulo, filtros, carpeta):
+def _por_zenity(titulo, filtros, carpeta, guardar=False, nombre="", etiqueta=None):
     ejecutable = shutil.which("zenity")
     if not ejecutable:
         return False, ""
 
-    argumentos = [ejecutable, "--file-selection", f"--title={titulo}"]
-    for etiqueta, patrones in filtros or []:
-        argumentos.append(f"--file-filter={etiqueta} | {patrones}")
-    if carpeta and os.path.isdir(carpeta):
-        argumentos.append(f"--filename={os.path.join(carpeta, '')}")
+    if guardar:
+        argumentos = [ejecutable, "--file-selection", f"--title={titulo}", "--save"]
+        inicial = os.path.join(carpeta or "", nombre or "")
+        if inicial:
+            argumentos.append(f"--filename={inicial}")
+    else:
+        argumentos = [ejecutable, "--file-selection", f"--title={titulo}"]
+        for etiqueta_f, patrones in filtros or []:
+            argumentos.append(f"--file-filter={etiqueta_f} | {patrones}")
+        if carpeta and os.path.isdir(carpeta):
+            argumentos.append(f"--filename={os.path.join(carpeta, '')}")
 
     try:
         resultado = subprocess.run(argumentos, capture_output=True, text=True)
     except Exception:  # noqa: BLE001
         return False, ""
-    return True, resultado.stdout.strip()
+
+    ruta = resultado.stdout.strip()
+    # zenity ya no confirma la sobrescritura (--confirm-overwrite esta
+    # obsoleto): se pregunta aqui para no pisar un archivo sin avisar.
+    if guardar and ruta and os.path.exists(ruta):
+        if preguntar("Sobrescribir archivo",
+                     f"Ya existe el archivo:\n{ruta}\n\n¿Quieres reemplazarlo?") is False:
+            return True, ""
+    return True, ruta
 
 
-def _por_tkinter(titulo, filtros, carpeta):
+def _por_tkinter(titulo, filtros, carpeta, guardar=False, nombre="", etiqueta=None):
     try:
         import tkinter
         from tkinter import filedialog
@@ -135,15 +159,24 @@ def _por_tkinter(titulo, filtros, carpeta):
         pass
 
     tipos = [
-        (etiqueta, " ".join(patrones.split()))
-        for etiqueta, patrones in (filtros or [])
-    ]
+        (etiqueta_f, " ".join(patrones.split()))
+        for etiqueta_f, patrones in (filtros or [])
+    ] or [("Todos los archivos", "*.*")]
     try:
-        ruta = filedialog.askopenfilename(
-            title=titulo,
-            initialdir=carpeta if carpeta and os.path.isdir(carpeta) else None,
-            filetypes=tipos or [("Todos los archivos", "*.*")],
-        )
+        if guardar:
+            ruta = filedialog.asksaveasfilename(
+                title=titulo,
+                initialdir=carpeta if carpeta and os.path.isdir(carpeta) else None,
+                initialfile=nombre or None,
+                defaultextension=".csv",
+                filetypes=tipos,
+            )
+        else:
+            ruta = filedialog.askopenfilename(
+                title=titulo,
+                initialdir=carpeta if carpeta and os.path.isdir(carpeta) else None,
+                filetypes=tipos,
+            )
     finally:
         raiz.destroy()
     return True, ruta or ""
@@ -160,6 +193,101 @@ def elegir_archivo(titulo: str, filtros=None, carpeta: str | None = None) -> str
         if disponible:
             return ruta
     return ""
+
+
+def guardar_archivo(titulo: str, nombre_sugerido: str = "",
+                    filtros=None, carpeta: str | None = None) -> str:
+    """Dialogo de **guardado** (no el de carga): devuelve la ruta elegida.
+
+    ``nombre_sugerido`` es la ruta completa que se propone (carpeta + nombre);
+    si el usuario cancela devuelve ``""``. El aviso de sobrescritura lo da el
+    dialogo nativo (portal y tkinter) y, en zenity, la propia aplicacion.
+    """
+    nombre = os.path.basename(nombre_sugerido or "")
+    carpeta = carpeta or (os.path.dirname(nombre_sugerido) if nombre_sugerido else None)
+    for intento in (_por_portal, _por_zenity, _por_tkinter):
+        disponible, ruta = intento(titulo, filtros, carpeta, guardar=True,
+                                   nombre=nombre, etiqueta="Guardar")
+        if disponible:
+            return ruta
+    return ""
+
+
+def preguntar(titulo: str, mensaje: str) -> bool | None:
+    """Pregunta de si/no con el dialogo nativo.
+
+    Devuelve ``True``/``False`` segun la respuesta y ``None`` si no hay
+    ningun dialogo disponible (quien llama decide que hacer sin preguntar).
+    """
+    zenity = shutil.which("zenity")
+    if zenity:
+        try:
+            resultado = subprocess.run(
+                [zenity, "--question", f"--title={titulo}", f"--text={mensaje}"],
+                capture_output=True, text=True,
+            )
+            if resultado.returncode == 0:
+                return True
+            if resultado.returncode == 1:
+                return False
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        import tkinter
+        from tkinter import messagebox
+    except Exception:  # noqa: BLE001
+        return None
+
+    raiz = tkinter.Tk()
+    raiz.withdraw()
+    try:
+        raiz.attributes("-topmost", True)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return bool(messagebox.askyesno(titulo, mensaje, parent=raiz))
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        raiz.destroy()
+
+
+def pedir_texto(titulo: str, mensaje: str, valor_inicial: str = "") -> str:
+    """Pide una linea de texto usando el dialogo nativo disponible."""
+    zenity = shutil.which("zenity")
+    if zenity:
+        try:
+            resultado = subprocess.run(
+                [zenity, "--entry", f"--title={titulo}", f"--text={mensaje}",
+                 f"--entry-text={valor_inicial}"],
+                capture_output=True, text=True,
+            )
+            if resultado.returncode == 0:
+                return resultado.stdout.strip()
+            return ""
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        import tkinter
+        from tkinter import simpledialog
+    except Exception:  # noqa: BLE001
+        return ""
+
+    raiz = tkinter.Tk()
+    raiz.withdraw()
+    try:
+        try:
+            raiz.attributes("-topmost", True)
+        except Exception:  # noqa: BLE001
+            pass
+        respuesta = simpledialog.askstring(
+            titulo, mensaje, initialvalue=valor_inicial, parent=raiz,
+        )
+    finally:
+        raiz.destroy()
+    return (respuesta or "").strip()
 
 
 # ---------------------------------------------------------------------------
