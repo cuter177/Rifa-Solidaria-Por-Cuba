@@ -18,7 +18,7 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if RAIZ not in sys.path:
     sys.path.insert(0, RAIZ)
 
-from rifa import datos, geometria as g  # noqa: E402
+from rifa import config, datos, geometria as g  # noqa: E402
 
 fallos: list[str] = []
 
@@ -487,9 +487,69 @@ def test_dialogos_guardado():
 
 
 # ---------------------------------------------------------------------------
+def test_total_boletos():
+    seccion("total de boletos de la rifa")
+    tmp = tempfile.mkdtemp(prefix="rifa_total_")
+    comprobar(config.TOTAL_NUMEROS is None or config.TOTAL_NUMEROS > 0,
+              "TOTAL_NUMEROS es None o un entero positivo")
+
+    # Se usan 10 boletos para la prueba, al margen del valor real de config.
+    original = config.TOTAL_NUMEROS
+    config.TOTAL_NUMEROS = 10
+    try:
+        # Archivo tipico: tres vendidos, dos filas sin nombre y sin mas.
+        a = os.path.join(tmp, "a.csv")
+        _escribir(a, "numero,nombre\n1,Ana\n2,Bea\n3,Caro\n4,\n5,\n")
+        lista, total = datos.cargar_con_total(a)
+        comprobar([p.numero for p in lista] == [1, 2, 3],
+                  "los boletos sin nombre quedan fuera de la lista")
+        comprobar(total == 10, f"el minimo de config marca el total: {total}")
+        comprobar(datos.resumen(lista, total) ==
+                  "3 participantes · numeros 1 a 10 (7 sin vender)",
+                  "resumen cuenta tambien los no vendidos del final")
+        comprobar(datos.resumen(lista) ==
+                  "3 participantes · numeros 1 a 10 (7 sin vender)",
+                  "resumen sin total explicito aplica el minimo")
+
+        # Si se anaden boletos nuevos (11, 12...) el rango se amplia solo.
+        c = os.path.join(tmp, "c.csv")
+        filas = "numero,nombre\n"
+        filas += "".join(f"{n},Persona {n}\n" for n in range(1, 6))
+        filas += "".join(f"{n},\n" for n in range(6, 13))
+        _escribir(c, filas)
+        lista, total = datos.cargar_con_total(c)
+        comprobar(total == 12, f"el archivo amplia el rango: {total}")
+        comprobar(datos.resumen(lista, total) ==
+                  "5 participantes · numeros 1 a 12 (7 sin vender)",
+                  "resumen del rango ampliado")
+
+        # Sin columna de numeros se autonumera: el total son las filas.
+        d = os.path.join(tmp, "d.csv")
+        _escribir(d, "nombre\nAna\nBea\nCarlos\n")
+        lista, total = datos.cargar_con_total(d)
+        comprobar([p.numero for p in lista] == [1, 2, 3], "autonumerado: numeros")
+        comprobar(total == 10, f"autonumerado usa el minimo: {total}")
+
+        # Sin el minimo, el rango sale exactamente del archivo.
+        config.TOTAL_NUMEROS = None
+        lista, total = datos.cargar_con_total(a)
+        comprobar(total == 5, f"sin minimo el total es el del archivo: {total}")
+        comprobar(datos.resumen(lista, total) ==
+                  "3 participantes · numeros 1 a 5 (2 sin vender)",
+                  "resumen sin minimo")
+        config.TOTAL_NUMEROS = 10
+    finally:
+        config.TOTAL_NUMEROS = original
+
+    comprobar(datos.resumen([]) == "Sin participantes cargados",
+              "resumen de lista vacia")
+
+
+# ---------------------------------------------------------------------------
 def main() -> int:
     test_geometria()
     test_datos()
+    test_total_boletos()
     test_resultados()
     test_pila_guardado_y_continuidad()
     test_dialogos_guardado()

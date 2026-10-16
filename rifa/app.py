@@ -49,6 +49,7 @@ class RifaApp:
         self.ruta: str | None = None
         self.sesion = ""
         self.participantes: list[datos.Participante] = []
+        self.total_boletos = 0
         self.restantes: list[datos.Participante] = []
         self.ganadores: list[datos.Participante] = []
         self.eliminados: list[datos.Participante] = []
@@ -552,7 +553,7 @@ class RifaApp:
 
     def cargar(self, ruta: str) -> bool:
         try:
-            lista = datos.cargar(ruta)
+            lista, total = datos.cargar_con_total(ruta)
         except datos.ErrorDatos as exc:
             self._avisar(str(exc))
             return False
@@ -565,6 +566,7 @@ class RifaApp:
         self.ruta = ruta
         self.sesion = time.strftime("%Y-%m-%d %H:%M:%S")
         self.participantes = lista
+        self.total_boletos = total
         self.restantes = list(lista)
         self.ganadores = []
         self.eliminados = []
@@ -928,11 +930,20 @@ class RifaApp:
         ganados = len(self.ganadores)
         eliminados = len(self.eliminados)
 
+        rango = ""
+        if self.total_boletos:
+            sin_vender = self.total_boletos - total
+            rango = (
+                f"Boletos: 1 a {self.total_boletos} · "
+                f"{sin_vender} sin vender\n"
+            )
+
         if total == 0:
             texto = "Sin participantes\n\nPulsa CARGAR LISTA"
         elif restantes == 0:
             texto = (
                 f"{total} participantes\n"
+                f"{rango}"
                 f"Ganados: {ganados} · No ganan: {eliminados}\n\n"
                 "Sorteo finalizado"
             )
@@ -946,6 +957,7 @@ class RifaApp:
                 ultimo = f"Nº {self.ultimo.numero} · {estado_ultimo}"
             texto = (
                 f"Participantes: {total}\n"
+                f"{rango}"
                 f"Restantes: {restantes}\n"
                 f"Ganados: {ganados} · Eliminados: {eliminados}\n"
                 f"Proximo: {proximo} · Ultimo: {ultimo}"

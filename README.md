@@ -73,8 +73,14 @@ Detalles que se detectan automáticamente:
 
 Las filas cuyo número no tiene nombre se consideran **boletos no vendidos** y
 se excluyen de la ruleta: un boleto no vendido nunca puede ganar. Por eso la
-ruleta puede mostrar huecos en la numeración. `--validar` informa de los huecos
-que existen dentro del rango de números cargado.
+ruleta puede mostrar huecos en la numeración.
+
+El **total de boletos de la rifa** es el número más alto del archivo (también
+cuentan las filas de boletos sin vender), sin bajar de `TOTAL_NUMEROS` de
+`rifa/config.py` (170 por defecto; `None` lo desactiva). `--validar` y la
+ventana informan del rango completo y de cuántos boletos quedan sin vender,
+por ejemplo: `154 participantes · numeros 1 a 170 (16 sin vender)`. Si añades
+boletos nuevos al archivo (171, 172…) el rango se amplía solo.
 
 ---
 

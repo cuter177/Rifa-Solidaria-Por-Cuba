@@ -17,6 +17,15 @@ ANCHO_MINIMO = 1000
 ALTO_MINIMO = 640
 
 # --------------------------------------------------------------------------
+# Rifa
+# --------------------------------------------------------------------------
+# Boletos de la rifa por defecto: piso del rango 1..TOTAL_NUMEROS, aunque el
+# archivo cargado traiga menos numeros. Si el archivo trae numeros mas altos
+# (por ejemplo 171, 172...), el rango se amplia solo. Ponlo a None para que
+# el rango salga siempre exactamente del archivo.
+TOTAL_NUMEROS = 170
+
+# --------------------------------------------------------------------------
 # Escena / camara (la rueda vive en coordenadas de mundo, radio 1.0)
 # --------------------------------------------------------------------------
 RADIO_RUEDA = 1.0
