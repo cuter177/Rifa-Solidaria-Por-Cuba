@@ -49,7 +49,7 @@ def principal(argv: list[str] | None = None) -> int:
 
     if ruta:
         try:
-            participantes = datos.cargar(ruta)
+            participantes, total_boletos = datos.cargar_con_total(ruta)
         except datos.ErrorDatos as exc:
             if args.archivo:
                 print(f"ERROR: {exc}", file=sys.stderr)
@@ -57,7 +57,7 @@ def principal(argv: list[str] | None = None) -> int:
             print(f"AVISO: no se pudo cargar '{ruta}': {exc}", file=sys.stderr)
             ruta = None
         else:
-            print(f"OK: {datos.resumen(participantes)}")
+            print(f"OK: {datos.resumen(participantes, total_boletos)}")
             if args.validar:
                 for p in participantes[:20]:
                     print(f"  {p.numero:>5}  {p.nombre}")

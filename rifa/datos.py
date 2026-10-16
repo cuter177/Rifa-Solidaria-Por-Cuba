@@ -12,6 +12,8 @@ import os
 import re
 from dataclasses import dataclass
 
+from . import config
+
 # Cabeceras reconocidas (normalizadas: minusculas, espacios -> guion bajo)
 CAB_NUMERO = {
     "numero", "número", "num", "num_", "n", "no", "nº", "n°", "nro",
@@ -197,8 +199,19 @@ def _detectar_columnas(filas: list[list]) -> tuple[int | None, int | None, list[
 # ---------------------------------------------------------------------------
 # API publica
 # ---------------------------------------------------------------------------
-def cargar(ruta: str) -> list[Participante]:
-    """Lee ``ruta`` (CSV o Excel) y devuelve los participantes ordenados."""
+def _total_boletos(maximo_archivo: int) -> int:
+    """Total de boletos de la rifa: el mayor numero visto, sin bajar del minimo."""
+    minimo = config.TOTAL_NUMEROS or 0
+    return max(minimo, maximo_archivo)
+
+
+def cargar_con_total(ruta: str) -> tuple[list[Participante], int]:
+    """Lee ``ruta`` (CSV o Excel) y devuelve ``(participantes, total_boletos)``.
+
+    El total es el numero de boleto mas alto del archivo, contando tambien las
+    filas que traen numero sin nombre (boletos no vendidos), sin bajar del
+    minimo de ``config.TOTAL_NUMEROS``.
+    """
     if not os.path.exists(ruta):
         raise ErrorDatos(f"No existe el archivo:\n{ruta}")
 
@@ -236,20 +249,25 @@ def cargar(ruta: str) -> list[Participante]:
     vistos: dict[int, str] = {}
     duplicados: list[str] = []
     descartadas = 0
+    maximo_archivo = 0
 
     for posicion, fila in enumerate(datos, start=1):
-        nombre = _texto(celda(fila, idx_nombre))
-        if not nombre:
-            descartadas += 1
-            continue
-
+        # El numero se mira antes del nombre: una fila con numero y sin
+        # nombre es un boleto no vendido, pero sigue marcando el total.
         if idx_numero is None:
             numero = posicion
         else:
             numero = _a_entero(celda(fila, idx_numero))
-            if numero is None:
-                descartadas += 1
-                continue
+
+        if numero is None:
+            descartadas += 1
+            continue
+        maximo_archivo = max(maximo_archivo, numero)
+
+        nombre = _texto(celda(fila, idx_nombre))
+        if not nombre:
+            descartadas += 1
+            continue
 
         if numero in vistos:
             duplicados.append(f"{numero} ({vistos[numero]} / {nombre})")
@@ -270,18 +288,34 @@ def cargar(ruta: str) -> list[Participante]:
         )
 
     participantes.sort(key=lambda p: p.numero)
-    return participantes
+    return participantes, _total_boletos(maximo_archivo)
 
 
-def resumen(participantes: list[Participante]) -> str:
+def cargar(ruta: str) -> list[Participante]:
+    """Lee ``ruta`` (CSV o Excel) y devuelve los participantes ordenados."""
+    return cargar_con_total(ruta)[0]
+
+
+def resumen(participantes: list[Participante], total: int | None = None) -> str:
+    """Resumen de la rifa: participantes, rango de boletos y sin vender.
+
+    ``total`` es el numero maximo de boleto de la rifa. Si no se indica, se
+    deduce del propio archivo (el mayor numero de la lista, sin bajar del
+    minimo de ``config.TOTAL_NUMEROS``); para contar tambien los boletos sin
+    vender que van despues del ultimo vendido hay que usar el total que
+    devuelve ``cargar_con_total``.
+    """
     if not participantes:
         return "Sin participantes cargados"
-    numeros = [p.numero for p in participantes]
-    faltantes = set(range(min(numeros), max(numeros) + 1)) - set(numeros)
-    aviso = f" ({len(faltantes)} sin vender)" if faltantes else ""
+    numeros = {p.numero for p in participantes}
+    if total is None:
+        total = _total_boletos(max(numeros))
+    total = max(total, max(numeros))
+    faltantes = sum(1 for n in range(1, total + 1) if n not in numeros)
+    aviso = f" ({faltantes} sin vender)" if faltantes else ""
     return (
         f"{len(participantes)} participantes · "
-        f"numeros {min(numeros)} a {max(numeros)}{aviso}"
+        f"numeros 1 a {total}{aviso}"
     )
 
 
