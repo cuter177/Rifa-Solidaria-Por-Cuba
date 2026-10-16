@@ -84,14 +84,18 @@ que existen dentro del rango de números cargado.
 |---|---|
 | Cargar un archivo | Botón azul **CARGAR LISTA** (o tecla `C`) |
 | Girar | Botón azul **GIRAR** (o `Espacio`) |
-| Ver los ganadores | Botón azul **RESULTADOS** (o `R`) |
+| Ver los ganadores | Botón azul **RESULTADOS** (o `R`): se abre directo, sin preguntar archivo |
+| Guardar `ganadores.csv` | Botón **GUARDAR CSV** dentro de la pantalla (o tecla `S`) |
+| Cargar otro archivo de resultados | Tecla `L` dentro de la pantalla de ganadores |
 | Cerrar la ventana del ganador | Un clic en cualquier parte (o `Espacio`) |
 | Salir | `Esc` |
 
-Los diálogos para elegir archivos son los **del propio escritorio** (XDG
-Desktop Portal): en KDE es el mismo cuadro de diálogo del gestor de archivos
-(Dolphin), no una ventana aparte de la aplicación. Si el portal no está
-disponible se usa `zenity` y, como último recurso, `tkinter`.
+Los diálogos para **elegir** y para **guardar** archivos son los **del propio
+escritorio** (XDG Desktop Portal): en KDE es el mismo cuadro de diálogo del
+gestor de archivos (Dolphin), no una ventana aparte de la aplicación. Si el
+portal no está disponible se usa `zenity` y, como último recurso, `tkinter`.
+El de guardar es un diálogo de guardado de verdad (con su aviso de
+sobrescritura), no el de carga.
 
 Al girar, la ruleta da 6–9 vueltas y frena despacio. El ganador se decide
 **antes** de girar y el ángulo final se calcula a partir de él, así que lo que
@@ -136,22 +140,53 @@ ejecuciones de otras y los registros antiguos sin `resultado` se completan
 automáticamente como `gana`. También se imprime en la terminal.
 
 El archivo `<tu_lista>_ganadores.csv` contiene únicamente los ganadores de la
-sesión actual, con el mismo formato `Número,Nombre` de una lista de entrada.
-Se puede cargar directamente para una segunda etapa del sorteo. Tanto este
+sesión actual, con el mismo formato `Número,Nombre` de una lista de entrada, y
+se reescribe **solo, tras cada giro ganador**. Las filas van en **forma de
+pila**: lo más reciente arriba, igual que en pantalla (y sirve igualmente como
+lista de entrada para una segunda etapa o para continuar el sorteo). Tanto este
 archivo como el registro de resultados se excluyen de git.
+
+### Continuar una sesión interrumpida
+
+Como `ganadores.csv` se va escribiendo solo, si la aplicación se cierra de
+golpe **no se pierde nada**: al volver a cargar esa misma lista (al arrancar o
+con **CARGAR LISTA**) se pregunta:
+
+* **Sí** → se restaura la sesión: los ganadores desaparecen de la ruleta, los
+  números que salieron sin ganar siguen eliminados, se recupera la sesión, el
+  contador de giros y el modo "cada cuántos gana uno" (deducido del registro;
+  si no se puede deducir se pregunta). En pantalla aparece
+  *«Sesión restaurada: N ganadores · M eliminados»*.
+* **No** → se empieza desde cero y el archivo de ganadores se vacía (el
+  registro `_resultados.csv` **nunca se borra**: las sesiones antiguas siguen
+  disponibles con `A`/`D` en la pantalla de resultados).
+
+Si no hay ningún diálogo disponible para preguntar, no se destruye nada: el
+archivo previo se copia a `<tu_lista>_ganadores_anterior.csv` y el sorteo
+empieza desde cero.
+
+La lista por defecto (`rifa-solidaria-por-cuba.csv` y, si no existe,
+`ejemplos/participantes.csv`) **sigue cargándose automáticamente** como hasta
+ahora; cargar archivos a mano sigue siendo una opción general con **CARGAR
+LISTA**.
 
 ### Panel de resultados (proyectar/retransmitir)
 
-El botón **RESULTADOS** abre el archivo de resultados con el diálogo del
-sistema y muestra en pantalla la **lista de ganadores** en grande, pensada para
-proyectar o retransmitir:
+El botón **RESULTADOS** (o `R`) muestra en pantalla la **lista de ganadores**
+en grande, pensada para proyectar o retransmitir, **sin pedir ningún archivo**:
 
-* Muestra la **sesión más reciente** del archivo; con `A`/`D` (o `←`/`→`) se
-  cambia a otra sesión.
+* Por defecto sale la **sesión actual** (la de esta ejecución); con `A`/`D`
+  (o `←`/`→`) se cambia a otras sesiones del registro.
+* Los ganadores se listan **en forma de pila: el más reciente arriba** (los
+  premios se rifa de peor a mejor, así que arriba está el último entregado).
 * Si hay muchos ganadores se reparte en páginas: un clic (o `Espacio`) pasa a
   la siguiente y, en la última, cierra el panel.
-* `O` abre la carpeta del archivo en el gestor de archivos del sistema (Dolphin)
-  para subirlo o compartirlo; `Esc` cierra el panel.
+* **`S`** o el botón **GUARDAR CSV** abren el diálogo de guardado del sistema
+  con `ganadores.csv` ya propuesto: guardan **la sesión que se está viendo**,
+  en el mismo orden de la pila. (El archivo ya se va escribiendo solo tras
+  cada giro; este botón solo lo confirma para llevárselo o subirlo.)
+* `L` carga a mano otro archivo de resultados, `O` abre la carpeta en el gestor
+  de archivos del sistema (Dolphin) y `Esc` cierra el panel.
 
 ---
 
@@ -214,12 +249,12 @@ Para añadir otra organización basta con agregar una tupla `(etiqueta, ruta)` a
 rifa/
 ├── config.py      colores, tiempos, fuentes y tamanos (todo lo ajustable)
 ├── geometria.py   matematica pura de la ruleta (sin VTK, con tests)
-├── datos.py       lectura de CSV/Excel y registro de ganadores
+├── datos.py       lectura de CSV/Excel, registro y continuation de ganadores
 ├── widgets.py     botones y textos 2D en pixeles de pantalla
 ├── ruleta.py      disco, aro, aguja y numeros
 ├── adornos.py     bandera de Cuba, silueta del Che y logos
 ├── reveal.py      sombreado, tarjeta del ganador, confeti y panel de resultados
-├── archivos.py    diálogos de archivo del sistema y gestor de archivos
+├── archivos.py    diálogos de carga/guardado del sistema y gestor de archivos
 ├── _portal_chooser.py  selector nativo (XDG Desktop Portal, subproceso)
 ├── app.py         ventana, estados, eventos y animaciones
 └── main.py        linea de comandos
@@ -236,9 +271,12 @@ rifa/
 ```
 
 `tools/capturas.py` es la herramienta para revisar el aspecto sin interactuar:
-recorre un giro completo y guarda fotogramas de la carga, el giro, el reveal y
-el estado posterior, además de verificar que el ángulo final coincide con el
-ganador y que un segundo giro sigue siendo coherente.
+recorre un giro completo y guarda fotogramas de la carga, el giro, el reveal,
+el estado posterior y la **pantalla de resultados en forma de pila**, además de
+verificar que el ángulo final coincide con el ganador, que un segundo giro
+sigue siendo coherente y que la lista del panel sale invertida. Trabaja sobre
+una copia temporal de la lista, así que no deja archivos de resultados ni
+activa la pregunta de continuación.
 
 ### Notas técnicas (VTK 9.7)
 

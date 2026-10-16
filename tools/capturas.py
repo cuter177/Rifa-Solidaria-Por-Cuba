@@ -9,12 +9,15 @@ Genera:
     02_giro_*.png      distintos momentos del giro
     03_reveal_*.png    sombreado y aparicion del nombre
     04_final.png       despues del clic, con la rueda reconstruida
+    07_resultados.png  pantalla de ganadores en forma de pila
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+import tempfile
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if RAIZ not in sys.path:
@@ -49,8 +52,25 @@ class Capturador:
 
 
 def main(argv):
-    archivo = argv[0] if argv else os.path.join(RAIZ, "ejemplos", "participantes.csv")
+    archivo = argv[0] if argv[0:1] else os.path.join(RAIZ, "ejemplos", "participantes.csv")
     destino = argv[1] if len(argv) > 1 else "/tmp/opencode/capturas"
+
+    # Se trabaja sobre una copia: las capturas no dejan archivos de resultados
+    # en la lista real ni activan la pregunta de continuation al reutilizarla.
+    carpeta_tmp = tempfile.mkdtemp(prefix="rifa_capturas_")
+    try:
+        return _generar(archivo, destino, carpeta_tmp)
+    finally:
+        shutil.rmtree(carpeta_tmp, ignore_errors=True)
+
+
+def _generar(archivo, destino, carpeta_tmp):
+    if not os.path.exists(archivo):
+        print("ERROR: no existe", archivo)
+        return 1
+    archivo = shutil.copy2(
+        archivo, os.path.join(carpeta_tmp, os.path.basename(archivo))
+    )
 
     app = RifaApp()
     app.render_window.SetOffScreenRendering(1)
@@ -109,6 +129,22 @@ def main(argv):
             return 4
         app._terminar_reveal()
         capt.tomar("06_tras_segundo_clic")
+
+    # ---- pantalla de resultados (ganadores en forma de pila) ----
+    app._abrir_resultados()
+    capt.tomar("07_resultados")
+    sesiones = app._hist_sesiones
+    if sesiones:
+        _, visibles = sesiones[app._hist_sesion]
+        numeros = [g.numero for g in visibles]
+        esperados = [g.numero for g in reversed(app.ganadores)]
+        print(f"   panel: {len(visibles)} ganadores en pila "
+              f"{'OK' if numeros == esperados else 'MAL'} {numeros}")
+        if numeros != esperados:
+            return 5
+    else:
+        print("   MAL: el panel no muestra ninguna sesion")
+        return 6
 
     print("CAPTURAS OK en", destino)
     return 0

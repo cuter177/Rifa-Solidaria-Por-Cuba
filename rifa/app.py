@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import random
+import shutil
 import time
 from enum import Enum
 
@@ -72,6 +73,8 @@ class RifaApp:
         self._hist_sesion = 0
         self._hist_pagina = 0
         self._hist_paginas: list[list[datos.Ganador]] = []
+        self._hist_aviso = ""
+        self._hist_aviso_color = config.DORADO
 
         self._crear_ventana()
         self._crear_escena()
@@ -301,9 +304,13 @@ class RifaApp:
             self.timer_encendido = False
 
     def _on_movimiento(self, _obj, _evento):
-        if self.estado in (Estado.REVELADO, Estado.GIRANDO, Estado.HISTORIAL):
-            return
         x, y = self.interactor.GetEventPosition()
+        if self.estado == Estado.HISTORIAL:
+            if self.historial.pasar_encima(x, y):
+                self.render_window.Render()
+            return
+        if self.estado in (Estado.REVELADO, Estado.GIRANDO):
+            return
         cambio = False
         for boton in self.botones:
             antes = boton.hover
@@ -317,6 +324,10 @@ class RifaApp:
             self._terminar_reveal()
             return
         if self.estado == Estado.HISTORIAL:
+            x, y = self.interactor.GetEventPosition()
+            if self.historial.contiene_guardar(x, y):
+                self._guardar_ganadores()
+                return
             self._avanzar_historial()
             return
         if self.estado == Estado.GIRANDO:
@@ -325,7 +336,7 @@ class RifaApp:
         if self.btn_cargar.habilitado and self.btn_cargar.contiene(x, y):
             self._elegir_archivo()
         elif self.btn_resultados.habilitado and self.btn_resultados.contiene(x, y):
-            self._elegir_resultados()
+            self._abrir_resultados()
         elif self.btn_modo.habilitado and self.btn_modo.contiene(x, y):
             self._elegir_modo()
         elif self.btn_girar.habilitado and self.btn_girar.contiene(x, y):
@@ -350,7 +361,13 @@ class RifaApp:
                 self._cambiar_sesion(-1 if tecla in ("Left", "a", "Prior") else 1)
         elif tecla in ("r", "R"):
             if self.estado in (Estado.LISTO, Estado.SIN_DATOS, Estado.FIN):
-                self._elegir_resultados()
+                self._abrir_resultados()
+        elif tecla in ("s", "S"):
+            if self.estado == Estado.HISTORIAL:
+                self._guardar_ganadores()
+        elif tecla in ("l", "L"):
+            if self.estado == Estado.HISTORIAL:
+                self._cargar_otro_resultados()
         elif tecla in ("o", "O"):
             if self.estado == Estado.HISTORIAL and self._hist_ruta:
                 archivos.revelar_archivo(self._hist_ruta)
@@ -492,7 +509,8 @@ class RifaApp:
                     "gana" if es_ganador else "no_gana",
                 )
                 if es_ganador:
-                    datos.guardar_ganadores(self.ruta, self.ganadores)
+                    # Orden pila: lo mas reciente primero (igual que en pantalla).
+                    datos.guardar_ganadores(self.ruta, list(reversed(self.ganadores)))
                 etiqueta = "Ganador" if es_ganador else "No gana"
                 print(f"{etiqueta} {ganador.numero:>3}: {ganador.nombre}  ->  {destino}",
                       flush=True)
@@ -542,6 +560,8 @@ class RifaApp:
             self._avisar(f"Error inesperado al leer el archivo:\n{exc}")
             return False
 
+        continuidad, continuar = self._preguntar_continuidad(ruta)
+
         self.ruta = ruta
         self.sesion = time.strftime("%Y-%m-%d %H:%M:%S")
         self.participantes = lista
@@ -555,27 +575,124 @@ class RifaApp:
         self._giro_es_ganador = True
         self.theta = 0.0
         self.indice_ganador = None
-        self.estado = Estado.LISTO
+
+        aviso_restaurado = ""
+        if continuar and continuidad is not None:
+            aviso_restaurado = self._restaurar_sesion(continuidad, lista)
 
         # Si el panel de resultados estaba abierto, se cierra.
         self.historial.visible(False)
+        self._hist_sesiones = []
         self._hist_paginas = []
+        self._hist_aviso = ""
         self._ocultar_ui_historial(False)
 
         self.rueda.establecer_numeros([p.numero for p in self.restantes])
         self.rueda.etiquetas_visibles(True)
         self.rueda.fijar_angulo(0.0)
+        self.estado = Estado.LISTO if self.restantes else Estado.FIN
 
         self._avisar(None)
         try:
-            datos.guardar_ganadores(self.ruta, self.ganadores)
+            # Orden pila: lo mas reciente primero (es el archivo con el que
+            # se continua y con el que exporta la pantalla de ganadores).
+            datos.guardar_ganadores(self.ruta, list(reversed(self.ganadores)))
         except OSError as exc:
             self._avisar(f"No se pudo preparar el archivo de ganadores:\n{exc}")
+        if aviso_restaurado:
+            self._avisar(aviso_restaurado)
 
         self._actualizar_hud()
         self._repartir()
         self.render_window.Render()
         return True
+
+    def _preguntar_continuidad(self, ruta: str):
+        """Decide si se continua una sesion anterior guardada en disco.
+
+        Devuelve ``(continuidad, continuar)``. Si no hay dialogo disponible
+        para preguntar, no se destruye nada: el archivo previo se respalda y
+        el sorteo arranca desde cero.
+        """
+        try:
+            continuidad = datos.leer_continuidad(ruta)
+        except OSError:
+            continuidad = None
+        if continuidad is None:
+            return None, False
+
+        n = len(continuidad.ganadores)
+        m = len(continuidad.eliminados)
+        mensaje = (
+            f"Esta lista tiene un archivo de ganadores con {n} ganador(es)"
+            + (f" y {m} numero(s) que salieron sin ganar" if m else "")
+            + " de una sesion anterior.\n\n"
+            "Si  ->  continuar ese sorteo\n"
+            "No  ->  empezar desde cero"
+        )
+        respuesta = archivos.preguntar("Continuar sorteo", mensaje)
+        if respuesta is None:
+            respaldo = self._respaldar_ganadores(ruta)
+            if respaldo:
+                print(f"Archivo de ganadores previo copiado a: {respaldo}",
+                      flush=True)
+            return None, False
+        if not respuesta:
+            return None, False
+        if continuidad.cada_cuantos is None:
+            # El patron del modo no se puede deducir del registro.
+            self._pedir_modo_continuacion()
+        return continuidad, True
+
+    def _respaldar_ganadores(self, ruta: str) -> str | None:
+        origen = datos.ruta_ganadores(ruta)
+        if not os.path.exists(origen):
+            return None
+        destino = os.path.splitext(origen)[0] + "_anterior.csv"
+        try:
+            shutil.copy2(origen, destino)
+        except OSError:
+            return None
+        return destino
+
+    def _pedir_modo_continuacion(self):
+        respuesta = archivos.pedir_texto(
+            "Modo del sorteo",
+            "Cada cuantos giros gana uno? (1 = gana el que sale)",
+            str(self.cada_cuantos_gana),
+        )
+        if not respuesta:
+            return
+        try:
+            frecuencia = int(respuesta)
+        except ValueError:
+            return
+        if 1 <= frecuencia <= 99:
+            self.cada_cuantos_gana = frecuencia
+
+    def _restaurar_sesion(self, continuidad, lista) -> str:
+        """Restaura ganadores, eliminados y contador; devuelve el aviso."""
+        validos = {p.numero for p in lista}
+        self.ganadores = [g for g in continuidad.ganadores if g.numero in validos]
+        self.eliminados = [g for g in continuidad.eliminados if g.numero in validos]
+        perdidos = ((len(continuidad.ganadores) - len(self.ganadores))
+                    + (len(continuidad.eliminados) - len(self.eliminados)))
+        fuera = {g.numero for g in self.ganadores} | {g.numero for g in self.eliminados}
+        self.restantes = [p for p in lista if p.numero not in fuera]
+        if continuidad.sesion:
+            self.sesion = continuidad.sesion
+        self.giros = continuidad.giros
+        self.contador_modo = continuidad.contador_modo
+        if continuidad.cada_cuantos:
+            self.cada_cuantos_gana = continuidad.cada_cuantos
+
+        aviso = (
+            f"Sesión restaurada: {len(self.ganadores)} ganadores · "
+            f"{len(self.eliminados)} eliminados · quedan {len(self.restantes)}"
+        )
+        if perdidos:
+            aviso += f" ({perdidos} ya no están en la lista)"
+        return aviso
 
     # ==================================================================
     # Modo del sorteo
@@ -606,7 +723,37 @@ class RifaApp:
     # ==================================================================
     # Resultados (lista de ganadores)
     # ==================================================================
-    def _elegir_resultados(self):
+    def _abrir_resultados(self):
+        """Muestra la pantalla de ganadores sin preguntar: sesion actual.
+
+        Si todavia no hay ninguna lista cargada no hay nada propio que
+        mostrar, y se conserva el comportamiento antiguo: se pide el archivo.
+        """
+        if not self.ruta:
+            self._cargar_otro_resultados()
+            return
+
+        # Las sesiones antiguas salen del registro; la actual, de la memoria
+        # (que es la fuente fresca y no depende de los archivos en disco).
+        anteriores: list[datos.Ganador] = []
+        registro = datos.ruta_registro(self.ruta)
+        ruta = registro if os.path.exists(registro) else None
+        if ruta:
+            try:
+                anteriores = [
+                    g for g in datos.cargar_resultados(ruta)
+                    if g.sesion != self.sesion
+                ]
+            except Exception:  # noqa: BLE001
+                anteriores = []
+        actuales = [
+            datos.Ganador(self.sesion, i + 1, p.numero, p.nombre, "", "gana")
+            for i, p in enumerate(self.ganadores)
+        ]
+        self._abrir_historial(ruta, anteriores + actuales)
+
+    def _cargar_otro_resultados(self):
+        """Carga a mano otro archivo de resultados (tecla L)."""
         carpeta = os.path.dirname(os.path.abspath(self.ruta)) if self.ruta else None
         ruta = archivos.elegir_archivo(
             "Selecciona el archivo de resultados",
@@ -618,18 +765,27 @@ class RifaApp:
         try:
             ganadores = datos.cargar_resultados(ruta)
         except datos.ErrorDatos as exc:
-            self._avisar(str(exc))
+            self._error_resultados(str(exc))
             return
         except Exception as exc:  # noqa: BLE001
-            self._avisar(f"No se pudo leer el archivo de resultados:\n{exc}")
+            self._error_resultados(f"No se pudo leer el archivo de resultados:\n{exc}")
             return
         self._abrir_historial(ruta, ganadores)
 
-    def _abrir_historial(self, ruta: str, ganadores: list[datos.Ganador]):
+    def _error_resultados(self, mensaje: str):
+        if self.estado == Estado.HISTORIAL:
+            self._mostrar_aviso_historial(mensaje, config.COLOR_ERROR)
+        else:
+            self._avisar(mensaje)
+
+    def _abrir_historial(self, ruta: str | None, ganadores: list[datos.Ganador]):
         self._hist_ruta = ruta
-        self._hist_sesiones = datos.agrupar_por_sesion(ganadores)
+        # Pila: dentro de cada sesion, lo mas reciente arriba.
+        self._hist_sesiones = datos.agrupar_por_sesion(ganadores, pila=True)
         self._hist_sesion = len(self._hist_sesiones) - 1
         self._hist_pagina = 0
+        self._hist_aviso = ""
+        self._hist_aviso_color = config.DORADO
 
         self._avisar(None)
         self.estado = Estado.HISTORIAL
@@ -642,8 +798,19 @@ class RifaApp:
         self.render_window.Render()
 
     def _pintar_historial(self):
+        aviso, color_aviso = self._hist_aviso, self._hist_aviso_color
+
         if not self._hist_sesiones:
+            self.historial.guardar_habilitado(False)
+            self.historial.mostrar(
+                "GANADORES",
+                "Sin ganadores todavia",
+                [],
+                "Gira la ruleta · C: cargar lista · L: cargar archivo · ESC: cerrar",
+                aviso=aviso, aviso_color=color_aviso,
+            )
             return
+
         self._hist_sesion = max(0, min(self._hist_sesion, len(self._hist_sesiones) - 1))
         sesion, ganadores = self._hist_sesiones[self._hist_sesion]
 
@@ -655,7 +822,7 @@ class RifaApp:
         self._hist_pagina = max(0, min(self._hist_pagina, len(self._hist_paginas) - 1))
         pagina = self._hist_paginas[self._hist_pagina]
 
-        subtitulo = f"{sesion}  ·  {len(ganadores)} ganadores"
+        subtitulo = f"{sesion}  ·  {len(ganadores)} ganadores  ·  más reciente arriba"
         if len(self._hist_sesiones) > 1:
             subtitulo += f"   (sesión {self._hist_sesion + 1}/{len(self._hist_sesiones)})"
         if len(self._hist_paginas) > 1:
@@ -663,16 +830,56 @@ class RifaApp:
 
         filas = [(f"Nº {g.numero}", g.nombre) for g in pagina]
         ultima = self._hist_pagina >= len(self._hist_paginas) - 1
+        acciones = "S: guardar CSV · L: cargar archivo · A/D: sesión · O: carpeta"
         if ultima:
-            pie = "CLIC o ESPACIO: cerrar  ·  A/D: otra sesión  ·  O: abrir carpeta  ·  ESC: cerrar"
+            pie = f"CLIC o ESPACIO: cerrar  ·  {acciones}  ·  ESC: cerrar"
         else:
-            pie = "CLIC o ESPACIO: siguiente página  ·  A/D: otra sesión  ·  O: abrir carpeta"
+            pie = f"CLIC o ESPACIO: siguiente página  ·  {acciones}"
 
-        self.historial.mostrar("GANADORES", subtitulo, filas, pie)
+        self.historial.guardar_habilitado(bool(ganadores))
+        self.historial.mostrar("GANADORES", subtitulo, filas, pie,
+                               aviso=aviso, aviso_color=color_aviso)
+
+    def _mostrar_aviso_historial(self, mensaje: str, color=config.DORADO):
+        self._hist_aviso = mensaje
+        self._hist_aviso_color = color
+        self._pintar_historial()
+        self.render_window.Render()
+
+    def _guardar_ganadores(self):
+        """Dialogo de guardado (solo confirmacion): el archivo automatico ya
+        se va escribiendo tras cada giro."""
+        if self.estado != Estado.HISTORIAL or not self._hist_sesiones:
+            return
+        self._hist_sesion = max(0, min(self._hist_sesion, len(self._hist_sesiones) - 1))
+        _, ganadores = self._hist_sesiones[self._hist_sesion]
+        if not ganadores:
+            return
+
+        sugerido = (datos.ruta_ganadores(self.ruta) if self.ruta
+                    else os.path.join(os.getcwd(), "ganadores.csv"))
+        carpeta = os.path.dirname(sugerido) or None
+        ruta = archivos.guardar_archivo(
+            "Guardar el archivo de ganadores",
+            nombre_sugerido=sugerido,
+            filtros=archivos.FILTRO_GANADORES,
+            carpeta=carpeta,
+        )
+        if not ruta:
+            return
+        try:
+            datos.guardar_ganadores_en(ruta, ganadores)
+        except OSError as exc:
+            self._mostrar_aviso_historial(f"No se pudo guardar: {exc}",
+                                          config.COLOR_ERROR)
+            return
+        self._mostrar_aviso_historial(f"✓ Guardado: {os.path.basename(ruta)}",
+                                      config.DORADO)
 
     def _avanzar_historial(self):
         if self._hist_pagina < len(self._hist_paginas) - 1:
             self._hist_pagina += 1
+            self._hist_aviso = ""
             self._pintar_historial()
             self.render_window.Render()
         else:
@@ -683,6 +890,7 @@ class RifaApp:
             return
         self._hist_sesion = (self._hist_sesion + delta) % len(self._hist_sesiones)
         self._hist_pagina = 0
+        self._hist_aviso = ""
         self._pintar_historial()
         self.render_window.Render()
 
